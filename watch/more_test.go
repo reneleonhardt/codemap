@@ -2,6 +2,7 @@ package watch
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -9,7 +10,10 @@ import (
 	"testing"
 	"time"
 
+	"codemap/limits"
 	"codemap/scanner"
+
+	"github.com/fsnotify/fsnotify"
 )
 
 func waitForWatchCondition(t *testing.T, timeout time.Duration, cond func() bool) {
@@ -118,6 +122,107 @@ func TestIsFileDirty(t *testing.T) {
 	}
 	if !isFileDirty(root, "main.go") {
 		t.Fatal("expected modified file to be dirty")
+	}
+}
+
+func TestConfiguredFileCountTracksConfiguredFilesAcrossEvents(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, ".codemap"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, ".codemap", "config.json"), []byte(`{"only":["go"]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	goFile := filepath.Join(root, "main.go")
+	textFile := filepath.Join(root, "notes.txt")
+	if err := os.WriteFile(goFile, []byte("package main\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(textFile, []byte("not source\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	d, err := NewDaemon(root, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Stop()
+	if err := d.fullScan(); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := d.FileCount(); got <= 1 {
+		t.Fatalf("tracked file count = %d, want it to remain broader than configured files", got)
+	}
+	if got := d.ConfiguredFileCount(); got != 1 {
+		t.Fatalf("configured file count = %d, want 1", got)
+	}
+
+	addedGo := filepath.Join(root, "added.go")
+	if err := os.WriteFile(addedGo, []byte("package main\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	d.handleEvent(fsnotify.Event{Name: addedGo, Op: fsnotify.Create})
+	if got := d.ConfiguredFileCount(); got != 2 {
+		t.Fatalf("configured file count after Go create = %d, want 2", got)
+	}
+
+	addedText := filepath.Join(root, "added.txt")
+	if err := os.WriteFile(addedText, []byte("not source\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	d.handleEvent(fsnotify.Event{Name: addedText, Op: fsnotify.Create})
+	if got := d.ConfiguredFileCount(); got != 2 {
+		t.Fatalf("configured file count after text create = %d, want 2", got)
+	}
+
+	if err := os.Remove(addedGo); err != nil {
+		t.Fatal(err)
+	}
+	d.handleEvent(fsnotify.Event{Name: addedGo, Op: fsnotify.Remove})
+	if got := d.ConfiguredFileCount(); got != 1 {
+		t.Fatalf("configured file count after Go remove = %d, want 1", got)
+	}
+}
+
+func TestConfiguredFileCountDrivesDependencyGraphLimit(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, ".codemap"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, ".codemap", "config.json"), []byte(`{"only":["go"]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "main.go"), []byte("package main\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i <= limits.LargeRepoFileCount; i++ {
+		path := filepath.Join(root, fmt.Sprintf("fixture-%04d.txt", i))
+		if err := os.WriteFile(path, []byte("not source\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	d, err := NewDaemon(root, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Stop()
+	if err := d.fullScan(); err != nil {
+		t.Fatal(err)
+	}
+
+	if d.FileCount() <= limits.LargeRepoFileCount {
+		t.Fatalf("tracked file count = %d, want a large repo", d.FileCount())
+	}
+	if got := d.ConfiguredFileCount(); got != 1 {
+		t.Fatalf("configured file count = %d, want 1", got)
+	}
+	if !shouldComputeDependencyGraph(d.ConfiguredFileCount()) {
+		t.Fatal("expected dependency graph to use the configured source count")
+	}
+	if shouldComputeDependencyGraph(d.FileCount()) {
+		t.Fatal("expected tracked file count alone to exceed the dependency graph limit")
 	}
 }
 

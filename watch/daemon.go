@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"codemap/config"
 	"codemap/internal/projectpath"
 	"codemap/limits"
 	"codemap/scanner"
@@ -54,13 +55,14 @@ func NewDaemon(root string, verbose bool) (*Daemon, error) {
 		done:     make(chan struct{}),
 		eventLog: filepath.Join(projectpath.CodemapDir(absRoot), "events.log"),
 		graph: &Graph{
-			Root:       absRoot,
-			Files:      make(map[string]*scanner.FileInfo),
-			DepCtx:     make(map[string]*DepContext),
-			State:      make(map[string]*FileState),
-			Events:     make([]Event, 0),
-			WorkingSet: NewWorkingSet(),
-			IsGitRepo:  isGitRepo,
+			Root:            absRoot,
+			Files:           make(map[string]*scanner.FileInfo),
+			ConfiguredFiles: make(map[string]struct{}),
+			DepCtx:          make(map[string]*DepContext),
+			State:           make(map[string]*FileState),
+			Events:          make([]Event, 0),
+			WorkingSet:      NewWorkingSet(),
+			IsGitRepo:       isGitRepo,
 		},
 	}
 
@@ -82,8 +84,8 @@ func (d *Daemon) Start() error {
 
 	// Compute dependency graph (best effort). Skip on very large repos to avoid
 	// expensive startup memory/CPU spikes in background hook flows.
-	fileCount := d.FileCount()
-	if fileCount <= limits.LargeRepoFileCount {
+	fileCount := d.ConfiguredFileCount()
+	if shouldComputeDependencyGraph(fileCount) {
 		d.computeDeps()
 	} else if d.verbose {
 		fmt.Printf("[watch] Skipping dependency graph for large repo (%d files)\n", fileCount)
@@ -137,6 +139,19 @@ func (d *Daemon) FileCount() int {
 	return len(d.graph.Files)
 }
 
+// ConfiguredFileCount returns the number of files included by the active
+// project filters. FileCount intentionally continues to report all tracked
+// files for watch/activity consumers.
+func (d *Daemon) ConfiguredFileCount() int {
+	d.graph.mu.RLock()
+	defer d.graph.mu.RUnlock()
+	return len(d.graph.ConfiguredFiles)
+}
+
+func shouldComputeDependencyGraph(fileCount int) bool {
+	return fileCount <= limits.LargeRepoFileCount
+}
+
 // WriteInitialState writes state after initial scan (for hooks)
 func (d *Daemon) WriteInitialState() {
 	d.writeState()
@@ -150,9 +165,14 @@ func (d *Daemon) fullScan() error {
 	if err != nil {
 		return err
 	}
+	configuredFiles, err := scanner.ScanConfiguredFiles(d.root, d.gitCache)
+	if err != nil {
+		return err
+	}
 
 	d.graph.mu.Lock()
 	d.graph.Files = make(map[string]*scanner.FileInfo)
+	d.graph.ConfiguredFiles = make(map[string]struct{}, len(configuredFiles))
 	d.graph.State = make(map[string]*FileState)
 	for i := range files {
 		f := &files[i]
@@ -162,6 +182,9 @@ func (d *Daemon) fullScan() error {
 			d.graph.State[f.Path] = &FileState{Lines: lines, Size: f.Size}
 		}
 	}
+	for _, file := range configuredFiles {
+		d.graph.ConfiguredFiles[file.Path] = struct{}{}
+	}
 	d.graph.LastScan = time.Now()
 	d.graph.mu.Unlock()
 
@@ -170,6 +193,11 @@ func (d *Daemon) fullScan() error {
 	}
 
 	return nil
+}
+
+func (d *Daemon) isConfiguredFile(path string) bool {
+	cfg := config.Load(d.root)
+	return scanner.MatchesFilters(path, filepath.Ext(path), cfg.Only, cfg.Exclude)
 }
 
 // computeDeps builds the file-to-file dependency graph

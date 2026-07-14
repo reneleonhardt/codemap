@@ -6,6 +6,9 @@ import (
 	"path/filepath"
 	"reflect"
 	"testing"
+	"time"
+
+	"codemap/watch"
 )
 
 func TestRunContextPreservesExplicitSubtree(t *testing.T) {
@@ -75,6 +78,30 @@ func TestBuildContextEnvelopeRespectsConfiguredFilters(t *testing.T) {
 	}
 	if !reflect.DeepEqual(envelope.Project.Languages, []string{"go"}) {
 		t.Fatalf("languages = %#v, want [go]", envelope.Project.Languages)
+	}
+}
+
+func TestBuildContextEnvelopeFallsBackToConfiguredScanForLegacyState(t *testing.T) {
+	root := t.TempDir()
+	mustWriteFile(t, filepath.Join(root, ".codemap", "config.json"), `{"only":["go"]}`)
+	mustWriteFile(t, filepath.Join(root, "main.go"), "package main\n")
+	mustWriteFile(t, filepath.Join(root, "notes.txt"), "not source\n")
+
+	legacyState, err := json.Marshal(watch.State{
+		UpdatedAt: time.Now(),
+		FileCount: 999,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustWriteFile(t, filepath.Join(root, ".codemap", "state.json"), string(legacyState))
+
+	cachedFileCount = -1
+	t.Cleanup(func() { cachedFileCount = -1 })
+	envelope := buildContextEnvelope(root, "", true)
+
+	if envelope.Project.FileCount != 1 {
+		t.Fatalf("file count = %d, want configured source count 1", envelope.Project.FileCount)
 	}
 }
 
