@@ -26,8 +26,11 @@ func GitDiffInfo(root, ref string) (*DiffInfo, error) {
 	// Get modified files vs ref with stats
 	cmd := exec.Command("git", "diff", "--numstat", ref)
 	cmd.Dir = root
-	output, err := cmd.Output()
+	output, err := cmd.CombinedOutput()
 	if err != nil {
+		if detail := strings.TrimSpace(string(output)); detail != "" {
+			return nil, fmt.Errorf("%w: %s", err, detail)
+		}
 		return nil, err
 	}
 

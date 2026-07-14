@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"codemap/internal/projectpath"
 	"codemap/limits"
 	"codemap/scanner"
 
@@ -51,7 +52,7 @@ func NewDaemon(root string, verbose bool) (*Daemon, error) {
 		gitCache: gitCache,
 		verbose:  verbose,
 		done:     make(chan struct{}),
-		eventLog: filepath.Join(absRoot, ".codemap", "events.log"),
+		eventLog: filepath.Join(projectpath.CodemapDir(absRoot), "events.log"),
 		graph: &Graph{
 			Root:       absRoot,
 			Files:      make(map[string]*scanner.FileInfo),
@@ -69,7 +70,7 @@ func NewDaemon(root string, verbose bool) (*Daemon, error) {
 // Start begins watching and returns immediately
 func (d *Daemon) Start() error {
 	// Ensure .codemap directory exists
-	codemapDir := filepath.Join(d.root, ".codemap")
+	codemapDir := projectpath.CodemapDir(d.root)
 	if err := os.MkdirAll(codemapDir, 0755); err != nil {
 		return fmt.Errorf("failed to create .codemap dir: %w", err)
 	}

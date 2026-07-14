@@ -68,6 +68,29 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
 
 If you prefer a standalone MCP binary, keep using `/path/to/codemap-mcp`.
 
+### Separate Project and Setup Roots
+
+When an MCP process analyzes a temporary worktree but should reuse `.codemap`
+state from the original checkout, put the global root flags before `mcp`:
+
+```json
+{
+  "mcpServers": {
+    "codemap": {
+      "command": "codemap",
+      "args": [
+        "--project-root", "/tmp/feature-worktree",
+        "--setup-root", "/path/to/original",
+        "mcp"
+      ]
+    }
+  }
+}
+```
+
+Both values may be repository roots or subdirectories. Managed MCP definitions
+created while `--setup-root` is active retain that setup root automatically.
+
 ## Available Tools (17)
 
 ### Project Analysis

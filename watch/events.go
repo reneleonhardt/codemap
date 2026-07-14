@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"codemap/internal/projectpath"
 	"codemap/limits"
 	"codemap/scanner"
 
@@ -429,7 +430,7 @@ func (d *Daemon) writeState() {
 		return
 	}
 
-	stateFile := filepath.Join(d.root, ".codemap", "state.json")
+	stateFile := filepath.Join(projectpath.CodemapDir(d.root), "state.json")
 	os.WriteFile(stateFile, data, 0644)
 }
 

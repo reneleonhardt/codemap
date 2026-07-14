@@ -1,17 +1,20 @@
 # 🛑 STOP — Run codemap before ANY task
 
-## Repo Root Requirement (Critical)
+## Repo Root Discovery
 
-Run codemap from the git repository root. Hooks and context files resolve from the current working directory, so running from a subdirectory can break hook context.
+Run Codemap anywhere inside the repository. Repo-scoped commands and hooks
+recover the nearest git root automatically.
+
+For a temporary worktree that should reuse untracked Codemap state from another
+checkout, select both roots explicitly. Either value may be a repository root or
+a subdirectory:
 
 ```bash
-cd "$(git rev-parse --show-toplevel)"
+codemap -C /tmp/feature-worktree --setup-root /path/to/original .
 ```
 
-`codemap` expects these at repo root:
-- `.git/`
-- `.codemap/`
-- `.claude/settings.local.json` (project-local hooks)
+`-C`/`--project-root` selects the code repository. `--setup-root` selects the
+repository containing the `.codemap/` config, state, skills, and handoffs.
 
 ```bash
 codemap .                     # Project structure

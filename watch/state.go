@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"codemap/internal/projectpath"
 )
 
 // ErrForeignDaemonPID is returned by Stop when the PID in watch.pid is alive and
@@ -25,7 +27,7 @@ var ErrDaemonOwnershipUnknown = errors.New("could not verify that watch.pid belo
 // ReadState reads the daemon state from disk (for hooks to use).
 // Returns nil if state doesn't exist or if it's stale and daemon is not running.
 func ReadState(root string) *State {
-	stateFile := filepath.Join(root, ".codemap", "state.json")
+	stateFile := filepath.Join(projectpath.CodemapDir(root), "state.json")
 	data, err := os.ReadFile(stateFile)
 	if err != nil {
 		return nil
@@ -47,13 +49,13 @@ func ReadState(root string) *State {
 
 // WritePID writes the daemon PID to .codemap/watch.pid
 func WritePID(root string) error {
-	pidFile := filepath.Join(root, ".codemap", "watch.pid")
+	pidFile := filepath.Join(projectpath.CodemapDir(root), "watch.pid")
 	return os.WriteFile(pidFile, []byte(fmt.Sprintf("%d", os.Getpid())), 0644)
 }
 
 // ReadPID reads the daemon PID from .codemap/watch.pid
 func ReadPID(root string) (int, error) {
-	pidFile := filepath.Join(root, ".codemap", "watch.pid")
+	pidFile := filepath.Join(projectpath.CodemapDir(root), "watch.pid")
 	data, err := os.ReadFile(pidFile)
 	if err != nil {
 		return 0, err
@@ -65,7 +67,7 @@ func ReadPID(root string) (int, error) {
 
 // RemovePID removes the PID file
 func RemovePID(root string) {
-	pidFile := filepath.Join(root, ".codemap", "watch.pid")
+	pidFile := filepath.Join(projectpath.CodemapDir(root), "watch.pid")
 	os.Remove(pidFile)
 }
 

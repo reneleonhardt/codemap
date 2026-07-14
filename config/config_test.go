@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"codemap/internal/projectpath"
 	"codemap/limits"
 )
 
@@ -157,11 +158,26 @@ func TestLoad_EmptyObject(t *testing.T) {
 }
 
 func TestConfigPath(t *testing.T) {
-	got := ConfigPath("/my/project")
-	want := filepath.Join("/my/project", ".codemap", "config.json")
-	if got != want {
-		t.Errorf("ConfigPath = %q, want %q", got, want)
-	}
+	t.Run("defaults to project root", func(t *testing.T) {
+		projectpath.ResetSetupRoot()
+		t.Cleanup(projectpath.ResetSetupRoot)
+		got := ConfigPath("/my/project")
+		want := filepath.Join("/my/project", ".codemap", "config.json")
+		if got != want {
+			t.Errorf("ConfigPath = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("uses setup root", func(t *testing.T) {
+		setupRoot := t.TempDir()
+		projectpath.SetSetupRoot(setupRoot)
+		t.Cleanup(projectpath.ResetSetupRoot)
+		got := ConfigPath("/my/project")
+		want := filepath.Join(setupRoot, ".codemap", "config.json")
+		if got != want {
+			t.Errorf("ConfigPath = %q, want %q", got, want)
+		}
+	})
 }
 
 func TestPolicyDefaultsAndClamps(t *testing.T) {

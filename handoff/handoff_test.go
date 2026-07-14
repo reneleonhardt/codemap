@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"codemap/internal/projectpath"
 	"codemap/watch"
 )
 
@@ -329,5 +330,17 @@ func TestMetricsLogCapped(t *testing.T) {
 	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
 	if len(lines) != maxMetricsLines {
 		t.Fatalf("expected %d metrics lines after cap, got %d", maxMetricsLines, len(lines))
+	}
+}
+
+func TestStoragePathsUseSetupRoot(t *testing.T) {
+	projectRoot := t.TempDir()
+	setupRoot := t.TempDir()
+	projectpath.SetSetupRoot(setupRoot)
+	t.Cleanup(projectpath.ResetSetupRoot)
+
+	want := filepath.Join(setupRoot, ".codemap", latestFilename)
+	if got := LatestPath(projectRoot); got != want {
+		t.Fatalf("LatestPath() = %q, want %q", got, want)
 	}
 }

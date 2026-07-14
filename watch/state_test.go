@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"codemap/internal/projectpath"
 	"codemap/scanner"
 )
 
@@ -143,6 +144,34 @@ func TestWriteInitialStateWritesReadableState(t *testing.T) {
 	}
 	if len(got.RecentEvents) != 1 || got.RecentEvents[0].Path != "main.go" {
 		t.Fatalf("unexpected recent events in state: %#v", got.RecentEvents)
+	}
+}
+
+func TestWatchStorageUsesSetupRoot(t *testing.T) {
+	projectRoot := t.TempDir()
+	setupRoot := t.TempDir()
+	projectpath.SetSetupRoot(setupRoot)
+	t.Cleanup(projectpath.ResetSetupRoot)
+	if err := os.MkdirAll(filepath.Join(setupRoot, ".codemap"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := WritePID(projectRoot); err != nil {
+		t.Fatalf("WritePID() error: %v", err)
+	}
+	wantPID := filepath.Join(setupRoot, ".codemap", "watch.pid")
+	if _, err := os.Stat(wantPID); err != nil {
+		t.Fatalf("setup-root PID missing: %v", err)
+	}
+
+	d, err := NewDaemon(projectRoot, false)
+	if err != nil {
+		t.Fatalf("NewDaemon() error: %v", err)
+	}
+	defer d.watcher.Close()
+	wantLog := filepath.Join(setupRoot, ".codemap", "events.log")
+	if d.eventLog != wantLog {
+		t.Fatalf("eventLog = %q, want %q", d.eventLog, wantLog)
 	}
 }
 

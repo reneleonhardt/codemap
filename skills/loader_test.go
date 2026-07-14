@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"codemap/internal/projectpath"
 )
 
 func TestParseFrontmatter(t *testing.T) {
@@ -297,5 +299,29 @@ My custom instructions.`
 	}
 	if s.Meta.Priority != 20 {
 		t.Errorf("expected priority 20 from override, got %d", s.Meta.Priority)
+	}
+}
+
+func TestLoadSkillsUsesSetupRoot(t *testing.T) {
+	projectRoot := t.TempDir()
+	setupRoot := t.TempDir()
+	projectpath.SetSetupRoot(setupRoot)
+	t.Cleanup(projectpath.ResetSetupRoot)
+
+	skillsDir := filepath.Join(setupRoot, ".codemap", "skills")
+	if err := os.MkdirAll(skillsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	content := "---\nname: setup-only\ndescription: Loaded from setup root\n---\n\n# Setup only\n"
+	if err := os.WriteFile(filepath.Join(skillsDir, "setup-only.md"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	idx, err := LoadSkills(projectRoot)
+	if err != nil {
+		t.Fatalf("LoadSkills() error: %v", err)
+	}
+	if skill := idx.ByName["setup-only"]; skill == nil || skill.Source != projectSource {
+		t.Fatalf("setup-root skill = %#v, want project skill", skill)
 	}
 }

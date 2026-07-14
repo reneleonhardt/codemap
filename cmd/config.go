@@ -35,7 +35,7 @@ var nonCodeExtensions = map[string]bool{
 
 // RunConfig dispatches the "config" subcommand.
 func RunConfig(subCmd, root string) {
-	absRoot, err := filepath.Abs(root)
+	absRoot, _, err := ResolveNearestGitRoot(root)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)

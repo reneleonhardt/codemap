@@ -43,7 +43,21 @@ Use `--agent claude` or `--agent codex` to configure only one integration.
 Managed commands use the verified absolute path of the running `codemap`; rerun
 setup if that path changes. `codemap doctor` validates without rewriting.
 
-Important: run `codemap setup` from the git repo root. Hook commands run relative to the current working directory; starting Claude from a nested folder can prevent codemap from finding `.git` and `.codemap`.
+Important: repo-scoped commands and managed hooks resolve the nearest git root
+automatically, so starting Claude or Codex from a nested folder still finds
+root-level setup and hook state.
+
+For a temporary or linked worktree whose untracked Codemap state remains in the
+original checkout, separate the analyzed project from its setup:
+
+```bash
+codemap -C /tmp/feature-worktree --setup-root /path/to/original context
+```
+
+`-C`/`--project-root` selects the repository being analyzed. `--setup-root`
+selects the repository whose `.codemap` config, daemon state, skills, and
+handoffs are reused. Each value may name the repository root or a subdirectory;
+managed hook, MCP, and daemon commands preserve the recovered setup root.
 
 ### Manual Hook JSON (advanced)
 
@@ -120,7 +134,14 @@ If you want to manage Claude settings manually, add this `hooks` object to `.cla
 
 Restart Claude Code. You should immediately see project context at session start.
 
-If you intentionally run Claude from subdirectories, pass the repo root explicitly:
+To preserve setup explicitly in a manually managed hook command:
+
+```bash
+codemap --setup-root /path/to/original hook session-start
+```
+
+If you intentionally want a hook to target a different repository than the
+current nearest git root, pass that root explicitly:
 
 ```bash
 codemap hook session-start "$(git rev-parse --show-toplevel)"

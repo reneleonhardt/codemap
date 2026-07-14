@@ -60,13 +60,16 @@ curl -fsSL "https://github.com/JordanCoin/codemap/releases/download/v${CODEMAP_V
 ## Recommended Setup (Hooks + Daemon + Config)
 
 No repo clone is required for normal users.
-Run setup from your git repo root (not a subdirectory), or hooks may not resolve project context.
+Run setup anywhere inside your git repo. Repo-scoped commands such as
+`setup`, `doctor`, `config`, `watch`, `skill`, `context`, `serve`, and
+managed hooks resolve the nearest git root automatically, including linked
+worktrees with a `.git` file.
 
 ```bash
 # install codemap first (package manager)
 brew tap JordanCoin/tap && brew install codemap
 
-# then run setup inside your project
+# then run setup anywhere inside your project repo
 cd /path/to/your/project
 codemap setup
 ```
@@ -132,10 +135,22 @@ codemap --depth 2 .
 codemap github.com/user/repo
 ```
 
+Work on one checkout while reusing Codemap's untracked state from another:
+
+```bash
+codemap -C /tmp/feature-worktree --setup-root /path/to/original context
+```
+
+`-C`/`--project-root` selects the repository Codemap operates on.
+`--setup-root` reuses `<repository>/.codemap` from another checkout. Both accept
+a repository or subdirectory; relative setup paths resolve from the project root.
+
 ## Options
 
 | Flag | Description |
 |------|-------------|
+| `-C, --project-root <repo>` | Operate on code in `<repo>` |
+| `--setup-root <repo>` | Reuse state from `<repo>/.codemap` |
 | `--depth, -d <n>` | Limit tree depth (0 = unlimited) |
 | `--only <exts>` | Only show files with these extensions |
 | `--exclude <patterns>` | Exclude files matching patterns |

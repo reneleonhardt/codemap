@@ -17,6 +17,7 @@ import (
 	"codemap/config"
 	"codemap/handoff"
 	"codemap/internal/buildinfo"
+	"codemap/internal/projectpath"
 	"codemap/limits"
 	"codemap/render"
 	"codemap/scanner"
@@ -45,6 +46,13 @@ var (
 )
 
 func main() {
+	args, err := applyGlobalRootOptions(os.Args[1:])
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(2)
+	}
+	os.Args = append([]string{os.Args[0]}, args...)
+
 	if len(os.Args) >= 2 && (os.Args[1] == "version" || os.Args[1] == "--version" || os.Args[1] == "-version") {
 		fmt.Printf("codemap %s\n", buildinfo.Current())
 		return
@@ -110,7 +118,7 @@ func main() {
 		return
 	}
 
-	// Handle "config" subcommand before global flag parsing
+	// Handle "config" subcommand before default analysis flag parsing.
 	if len(os.Args) >= 2 && os.Args[1] == "config" {
 		subCmd := ""
 		if len(os.Args) >= 3 {
@@ -124,7 +132,7 @@ func main() {
 		return
 	}
 
-	// Handle "setup" subcommand before global flag parsing
+	// Handle "setup" subcommand before default analysis flag parsing.
 	if len(os.Args) >= 2 && os.Args[1] == "setup" {
 		root, _ := os.Getwd()
 		if code := cmd.RunSetup(os.Args[2:], root); code != 0 {
@@ -141,7 +149,7 @@ func main() {
 		return
 	}
 
-	// Handle "mcp" subcommand before global flag parsing
+	// Handle "mcp" subcommand before default analysis flag parsing.
 	if len(os.Args) >= 2 && os.Args[1] == "mcp" {
 		if code := cmd.RunMCP(os.Args[2:]); code != 0 {
 			os.Exit(code)
@@ -149,7 +157,7 @@ func main() {
 		return
 	}
 
-	// Handle "skill" subcommand before global flag parsing
+	// Handle "skill" subcommand before default analysis flag parsing.
 	if len(os.Args) >= 2 && os.Args[1] == "skill" {
 		root, _ := os.Getwd()
 		cmd.RunSkill(os.Args[2:], root)
@@ -162,7 +170,7 @@ func main() {
 		return
 	}
 
-	// Handle "context" subcommand before global flag parsing
+	// Handle "context" subcommand before default analysis flag parsing.
 	if len(os.Args) >= 2 && os.Args[1] == "context" {
 		root, _ := os.Getwd()
 		cmd.RunContext(os.Args[2:], root)
@@ -214,6 +222,8 @@ func main() {
 		fmt.Println("Options:")
 		fmt.Println("  --help              Show this help message")
 		fmt.Println("  --version           Show build version")
+		fmt.Println("  -C, --project-root <repo> Operate on code in <repo>.")
+		fmt.Println("  --setup-root <repo> Reuse state from <repo>/.codemap.")
 		fmt.Println("  --skyline           City skyline visualization")
 		fmt.Println("  --animate           Animated skyline (use with --skyline)")
 		fmt.Println("  --deps              Dependency flow map (functions & imports)")
@@ -342,7 +352,12 @@ func main() {
 
 	// Watch mode - start daemon
 	if *watchMode {
-		runWatchMode(absRoot, *debugMode)
+		resolvedRoot, _, err := cmd.ResolveNearestGitRoot(absRoot)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error getting watch root: %v\n", err)
+			os.Exit(1)
+		}
+		runWatchMode(resolvedRoot, *debugMode)
 		return
 	}
 
@@ -421,6 +436,31 @@ func main() {
 	} else {
 		render.Tree(os.Stdout, project)
 	}
+}
+
+func applyGlobalRootOptions(args []string) ([]string, error) {
+	opts, remaining, err := cmd.ParseGlobalRootOptions(args)
+	if err != nil {
+		return nil, err
+	}
+	if !opts.Active() {
+		return remaining, nil
+	}
+
+	launchDir, err := os.Getwd()
+	if err != nil {
+		return nil, fmt.Errorf("get working directory: %w", err)
+	}
+	roots, err := cmd.ResolveGlobalRoots(opts, launchDir)
+	if err != nil {
+		return nil, err
+	}
+	if err := os.Chdir(roots.Project); err != nil {
+		return nil, fmt.Errorf("change to project root %q: %w", roots.Project, err)
+	}
+	projectpath.SetSetupRoot(roots.Setup)
+
+	return remaining, nil
 }
 
 // stdinManifest is the JSON format accepted by --stdin.
@@ -593,7 +633,7 @@ func runImportersMode(root, file string, jsonMode bool) {
 }
 
 func runWatchSubcommand(subCmd, root string) {
-	absRoot, err := filepath.Abs(root)
+	absRoot, _, err := cmd.ResolveNearestGitRoot(root)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
@@ -611,7 +651,8 @@ func runWatchSubcommand(subCmd, root string) {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
 		}
-		cmd := execCommand(exe, "watch", "daemon", absRoot)
+		args := projectpath.PrependSetupRootArgs("watch", "daemon", absRoot)
+		cmd := execCommand(exe, args...)
 		cmd.Stdout = nil
 		cmd.Stderr = nil
 		cmd.Stdin = nil
