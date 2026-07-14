@@ -38,6 +38,13 @@ jobs:
       - name: Verify Go 1.26
         run: go version | grep -Eq 'go1\.26([.]|[[:space:]])'
 
+      - name: Derive integration version
+        shell: bash
+        run: |
+          short_sha="${GITHUB_SHA:0:7}"
+          echo "CODEMAP_SNAPSHOT_VERSION=4.1.10-5+${short_sha}" >> "$GITHUB_ENV"
+          echo "CODEMAP_BUILD_VERSION=v4.1.10-5+${short_sha}" >> "$GITHUB_ENV"
+
       - name: Build GoReleaser snapshot
         uses: goreleaser/goreleaser-action@v7
         with:
@@ -45,6 +52,18 @@ jobs:
           version: '~> v2'
           # Empty release notes skip unused changelog generation in snapshot mode.
           args: release --snapshot --clean --release-notes /dev/null --config .goreleaser.full.yml
+
+      - name: Verify integration binary version
+        shell: bash
+        run: |
+          binary=dist/codemap_linux_amd64_v1/codemap
+          expected="codemap ${CODEMAP_BUILD_VERSION}"
+          test -x "$binary"
+          actual="$("$binary" --version)"
+          if [[ "$actual" != "$expected" ]]; then
+            echo "expected '$expected', got '$actual'" >&2
+            exit 1
+          fi
 
       - name: Upload integration artifacts
         uses: actions/upload-artifact@v7

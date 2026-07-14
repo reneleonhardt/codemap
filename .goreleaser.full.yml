@@ -2,6 +2,9 @@ version: 2
 
 project_name: codemap
 
+snapshot:
+  version_template: '{{if index .Env "CODEMAP_SNAPSHOT_VERSION"}}{{index .Env "CODEMAP_SNAPSHOT_VERSION"}}{{else}}{{.Version}}-SNAPSHOT-{{.ShortCommit}}{{end}}'
+
 before:
   hooks:
     - go mod tidy
@@ -15,7 +18,7 @@ builds:
       - CGO_ENABLED=0
     ldflags:
       - -s -w
-      - -X codemap/internal/buildinfo.version={{.Version}}
+      - -X codemap/internal/buildinfo.version={{if index .Env "CODEMAP_BUILD_VERSION"}}{{index .Env "CODEMAP_BUILD_VERSION"}}{{else}}{{.Version}}{{end}}
     goos:
       - darwin
       - linux
