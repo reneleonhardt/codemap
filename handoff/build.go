@@ -68,7 +68,7 @@ func Build(root string, opts BuildOptions) (*Artifact, error) {
 		state = watch.ReadState(absRoot)
 	}
 
-	fileCount := resolveRepoFileCount(absRoot, state)
+	fileCount := resolveRepoFileCount(absRoot)
 	opts = normalizeOptions(opts, fileCount)
 
 	branch, err := gitCurrentBranch(absRoot)
@@ -595,13 +595,9 @@ func gitCurrentBranch(root string) (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
-func resolveRepoFileCount(root string, state *watch.State) int {
-	if state != nil && state.FileCount > 0 {
-		return state.FileCount
-	}
-
+func resolveRepoFileCount(root string) int {
 	gitCache := scanner.NewGitIgnoreCache(root)
-	files, err := scanner.ScanFiles(root, gitCache, nil, nil)
+	files, err := scanner.ScanConfiguredFiles(root, gitCache)
 	if err != nil {
 		return 0
 	}
