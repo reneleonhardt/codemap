@@ -31,6 +31,11 @@ func RunServe(args []string, root string) {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
+	absRoot, err = ValidateProjectPath(absRoot)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
 
 	mux := http.NewServeMux()
 

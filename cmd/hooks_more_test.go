@@ -872,3 +872,52 @@ func TestHookFilesUseSetupRoot(t *testing.T) {
 		t.Fatalf("status = %q, want feature", data)
 	}
 }
+
+func TestAutomaticLinkedWorktreeUsesLocalHookState(t *testing.T) {
+	projectpath.ResetSetupRoot()
+	t.Cleanup(projectpath.ResetSetupRoot)
+	primary := t.TempDir()
+	gitDir := filepath.Join(primary, ".git", "worktrees", "agent")
+	if err := os.MkdirAll(gitDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(primary, ".codemap"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(primary, ".codemap", "events.log"), []byte("primary event\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(gitDir, "commondir"), []byte("../..\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	linked := filepath.Join(t.TempDir(), "linked")
+	if err := os.MkdirAll(filepath.Join(linked, ".codemap"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(linked, ".git"), []byte("gitdir: "+gitDir+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(linked, ".codemap", "events.log"), []byte("linked event\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	linked, _ = filepath.EvalSymlinks(linked)
+
+	events := getLastSessionEvents(linked)
+	if len(events) != 1 || events[0] != "linked event" {
+		t.Fatalf("getLastSessionEvents() = %#v, want linked event", events)
+	}
+	writeStatuslineState(linked, TaskIntent{Category: "feature", RiskLevel: "low"})
+	if _, err := os.Stat(filepath.Join(linked, ".codemap", "status")); err != nil {
+		t.Fatalf("linked status missing: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(primary, ".codemap", "status")); !os.IsNotExist(err) {
+		t.Fatalf("primary status unexpectedly created: %v", err)
+	}
+	if err := updateSessionLease(linked, "session-1", true, time.Now(), nil); err != nil {
+		t.Fatalf("updateSessionLease() error: %v", err)
+	}
+	entries, err := os.ReadDir(filepath.Join(linked, ".codemap", "sessions"))
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("linked session lease entries = %d, err = %v", len(entries), err)
+	}
+}

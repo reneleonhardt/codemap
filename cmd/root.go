@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"codemap/internal/projectpath"
 )
 
 // GlobalRootOptions are invocation-wide roots extracted before command parsing.
@@ -23,6 +25,8 @@ func (o GlobalRootOptions) Active() bool {
 type InvocationRoots struct {
 	Project string
 	Setup   string
+	Runtime string
+	Source  projectpath.Source
 }
 
 // ParseGlobalRootOptions extracts root options wherever they appear before --.
@@ -87,6 +91,8 @@ func ResolveGlobalRoots(opts GlobalRootOptions, launchDir string) (InvocationRoo
 	}
 
 	setupRoot := projectRoot
+	runtimeRoot := projectRoot
+	source := projectpath.SourceProject
 	if opts.SetupRoot != "" {
 		setupInput := opts.SetupRoot
 		if !filepath.IsAbs(setupInput) {
@@ -100,12 +106,22 @@ func ResolveGlobalRoots(opts GlobalRootOptions, launchDir string) (InvocationRoo
 		if !setupFound {
 			return InvocationRoots{}, fmt.Errorf("resolve setup root: %q is not inside a Git repository", setupInput)
 		}
+		runtimeRoot = setupRoot
+		source = projectpath.SourceExplicit
+	} else {
+		selection, selectErr := projectpath.Select(projectRoot)
+		if selectErr != nil {
+			return InvocationRoots{}, fmt.Errorf("resolve setup root: %w", selectErr)
+		}
+		setupRoot = selection.SetupRoot
+		runtimeRoot = selection.RuntimeRoot
+		source = selection.Source
 	}
 	if err := validateCodemapStorageRoot(setupRoot); err != nil {
 		return InvocationRoots{}, fmt.Errorf("resolve setup root: %w", err)
 	}
 
-	return InvocationRoots{Project: projectRoot, Setup: setupRoot}, nil
+	return InvocationRoots{Project: projectRoot, Setup: setupRoot, Runtime: runtimeRoot, Source: source}, nil
 }
 
 func validateCodemapStorageRoot(root string) error {
@@ -121,6 +137,20 @@ func validateCodemapStorageRoot(root string) error {
 		return fmt.Errorf("unsafe Codemap storage %q: expected a real directory", dir)
 	}
 	return nil
+}
+
+// ValidateProjectPath returns the caller's absolute path only after automatic
+// project selection succeeds. Keeping the exact path preserves commands that
+// intentionally analyze a repository subdirectory.
+func ValidateProjectPath(path string) (string, error) {
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	if _, err := projectpath.Select(absPath); err != nil {
+		return "", err
+	}
+	return absPath, nil
 }
 
 // ResolveNearestGitRoot returns the nearest ancestor directory that contains a

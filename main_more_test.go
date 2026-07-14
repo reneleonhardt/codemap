@@ -84,6 +84,70 @@ func TestApplyGlobalRootOptions(t *testing.T) {
 	}
 }
 
+func TestApplyGlobalRootOptionsDirectoryKeepsAutomaticLinkedSelection(t *testing.T) {
+	launchDir := t.TempDir()
+	primary := filepath.Join(launchDir, "primary")
+	gitDir := filepath.Join(primary, ".git", "worktrees", "agent")
+	if err := os.MkdirAll(gitDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(primary, ".codemap"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(gitDir, "commondir"), []byte("../..\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	linked := filepath.Join(launchDir, "linked")
+	if err := os.MkdirAll(filepath.Join(linked, "pkg"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(linked, ".git"), []byte("gitdir: "+gitDir+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	originalDir, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(originalDir) })
+	projectpath.ResetSetupRoot()
+	t.Cleanup(projectpath.ResetSetupRoot)
+
+	if _, err := applyGlobalRootOptions([]string{"-C", filepath.Join(linked, "pkg"), "context"}); err != nil {
+		t.Fatalf("applyGlobalRootOptions() error: %v", err)
+	}
+	if got := projectpath.ConfiguredSetupRoot(); got != "" {
+		t.Fatalf("ConfiguredSetupRoot() = %q, want no explicit override", got)
+	}
+	selection, err := projectpath.Select(linked)
+	if err != nil {
+		t.Fatalf("Select() error: %v", err)
+	}
+	primary, _ = filepath.EvalSymlinks(primary)
+	if selection.SetupRoot != primary || selection.Source != projectpath.SourceLinkedWorktree {
+		t.Fatalf("Select() = %#v, want automatic setup %q", selection, primary)
+	}
+}
+
+func TestApplyGlobalRootOptionsRejectsMalformedLinkedMetadataWithoutFlags(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, ".git"), []byte("not a gitdir\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	originalDir, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(root); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(originalDir) })
+
+	if _, err := applyGlobalRootOptions([]string{"context"}); err == nil || !strings.Contains(err.Error(), "resolve linked worktree setup") {
+		t.Fatalf("applyGlobalRootOptions() error = %v, want bounded linked-worktree error", err)
+	}
+}
+
 func (f *fakeWatchProcess) Start() error {
 	f.started = true
 	return f.startErr

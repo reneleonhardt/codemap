@@ -135,22 +135,37 @@ codemap --depth 2 .
 codemap github.com/user/repo
 ```
 
-Work on one checkout while reusing Codemap's untracked state from another:
+Standard linked Git worktrees automatically reuse the primary worktree's
+`.codemap/config.json` and project skills. Create the worktree with Git, an IDE,
+or any manager that uses standard linked-worktree metadata, then give the agent
+its absolute path:
 
 ```bash
-codemap -C /tmp/feature-worktree --setup-root /path/to/original context
+git worktree add <path> -b <branch> <base>
+codemap -C /tmp/feature-worktree context
+```
+
+Normal CLI and plugin MCP calls need no `--setup-root`: central config and skills
+come from the primary worktree, while handoffs, watcher files, and hook/session
+state remain in the linked worktree. Independent clones have no trusted Git
+metadata linking them, so sharing setup between them still requires an explicit
+override:
+
+```bash
+codemap -C /tmp/independent-clone --setup-root /path/to/original context
 ```
 
 `-C`/`--project-root` selects the repository Codemap operates on.
-`--setup-root` reuses `<repository>/.codemap` from another checkout. Both accept
-a repository or subdirectory; relative setup paths resolve from the project root.
+`--setup-root` explicitly reuses `<repository>/.codemap` policy and runtime state
+from another checkout. Both accept a repository or subdirectory; relative setup
+paths resolve from the project root.
 
 ## Options
 
 | Flag | Description |
 |------|-------------|
 | `-C, --project-root <repo>` | Operate on code in `<repo>` |
-| `--setup-root <repo>` | Reuse state from `<repo>/.codemap` |
+| `--setup-root <repo>` | Explicitly reuse policy and runtime state from `<repo>/.codemap` |
 | `--depth, -d <n>` | Limit tree depth (0 = unlimited) |
 | `--only <exts>` | Only show files with these extensions |
 | `--exclude <patterns>` | Exclude files matching patterns |

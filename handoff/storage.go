@@ -19,40 +19,40 @@ const (
 
 // LatestPath returns the absolute location of the latest handoff artifact.
 func LatestPath(root string) string {
-	setupRoot := projectpath.SetupRoot(root)
-	absRoot, err := filepath.Abs(setupRoot)
+	runtimeRoot := projectpath.RuntimeRoot(root)
+	absRoot, err := filepath.Abs(runtimeRoot)
 	if err != nil {
-		return filepath.Join(setupRoot, ".codemap", latestFilename)
+		return filepath.Join(runtimeRoot, ".codemap", latestFilename)
 	}
 	return filepath.Join(absRoot, ".codemap", latestFilename)
 }
 
 // PrefixPath returns the absolute location of the prefix snapshot.
 func PrefixPath(root string) string {
-	setupRoot := projectpath.SetupRoot(root)
-	absRoot, err := filepath.Abs(setupRoot)
+	runtimeRoot := projectpath.RuntimeRoot(root)
+	absRoot, err := filepath.Abs(runtimeRoot)
 	if err != nil {
-		return filepath.Join(setupRoot, ".codemap", prefixFilename)
+		return filepath.Join(runtimeRoot, ".codemap", prefixFilename)
 	}
 	return filepath.Join(absRoot, ".codemap", prefixFilename)
 }
 
 // DeltaPath returns the absolute location of the delta snapshot.
 func DeltaPath(root string) string {
-	setupRoot := projectpath.SetupRoot(root)
-	absRoot, err := filepath.Abs(setupRoot)
+	runtimeRoot := projectpath.RuntimeRoot(root)
+	absRoot, err := filepath.Abs(runtimeRoot)
 	if err != nil {
-		return filepath.Join(setupRoot, ".codemap", deltaFilename)
+		return filepath.Join(runtimeRoot, ".codemap", deltaFilename)
 	}
 	return filepath.Join(absRoot, ".codemap", deltaFilename)
 }
 
 // MetricsPath returns the absolute location of the handoff metrics log.
 func MetricsPath(root string) string {
-	setupRoot := projectpath.SetupRoot(root)
-	absRoot, err := filepath.Abs(setupRoot)
+	runtimeRoot := projectpath.RuntimeRoot(root)
+	absRoot, err := filepath.Abs(runtimeRoot)
 	if err != nil {
-		return filepath.Join(setupRoot, ".codemap", metricsFilename)
+		return filepath.Join(runtimeRoot, ".codemap", metricsFilename)
 	}
 	return filepath.Join(absRoot, ".codemap", metricsFilename)
 }

@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"codemap/internal/projectpath"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -307,6 +308,38 @@ func TestResolveGlobalRoots(t *testing.T) {
 		}
 		if roots.Project != projectRoot || roots.Setup != projectRoot {
 			t.Fatalf("roots = %#v, want project and setup %q", roots, projectRoot)
+		}
+	})
+
+	t.Run("directory alone discovers linked worktree setup", func(t *testing.T) {
+		primary := filepath.Join(launchDir, "primary")
+		gitDir := filepath.Join(primary, ".git", "worktrees", "agent")
+		if err := os.MkdirAll(gitDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.MkdirAll(filepath.Join(primary, ".codemap"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(gitDir, "commondir"), []byte("../..\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		linked := filepath.Join(launchDir, "linked")
+		nested := filepath.Join(linked, "pkg")
+		if err := os.MkdirAll(nested, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(linked, ".git"), []byte("gitdir: "+gitDir+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		roots, err := ResolveGlobalRoots(GlobalRootOptions{Directory: nested}, launchDir)
+		if err != nil {
+			t.Fatalf("ResolveGlobalRoots() error: %v", err)
+		}
+		primary = canonicalTestPath(t, primary)
+		linked = canonicalTestPath(t, linked)
+		if roots.Project != linked || roots.Setup != primary || roots.Runtime != linked || roots.Source != projectpath.SourceLinkedWorktree {
+			t.Fatalf("roots = %#v, want project/runtime %q, setup %q, linked source", roots, linked, primary)
 		}
 	})
 

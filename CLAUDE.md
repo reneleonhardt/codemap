@@ -5,16 +5,19 @@
 Run Codemap anywhere inside the repository. Repo-scoped commands and hooks
 recover the nearest git root automatically.
 
-For a temporary worktree that should reuse untracked Codemap state from another
-checkout, select both roots explicitly. Either value may be a repository root or
-a subdirectory:
+Standard linked Git worktrees automatically reuse `.codemap/config.json` and
+project skills from their primary worktree. The parent process should give the
+agent the linked worktree's absolute path; normal commands need no setup flag:
 
 ```bash
-codemap -C /tmp/feature-worktree --setup-root /path/to/original .
+git worktree add <path> -b <branch> <base>
+codemap -C /tmp/feature-worktree .
 ```
 
-`-C`/`--project-root` selects the code repository. `--setup-root` selects the
-repository containing the `.codemap/` config, state, skills, and handoffs.
+Central policy is inherited, while mutable handoff, watcher, and hook/session
+state stays in the linked worktree. Independent clones remain unrelated and
+must use explicit `--setup-root /path/to/original` when they need to share
+setup. `-C`/`--project-root` selects only the code repository.
 
 ```bash
 codemap .                     # Project structure

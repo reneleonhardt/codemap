@@ -311,6 +311,10 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Error getting absolute path: %v\n", err)
 		os.Exit(1)
 	}
+	if _, err := cmd.ValidateProjectPath(absRoot); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
 
 	// Initialize gitignore cache (supports nested .gitignore files)
 	gitCache := scanner.NewGitIgnoreCache(root)
@@ -444,6 +448,13 @@ func applyGlobalRootOptions(args []string) ([]string, error) {
 		return nil, err
 	}
 	if !opts.Active() {
+		launchDir, err := os.Getwd()
+		if err != nil {
+			return nil, fmt.Errorf("get working directory: %w", err)
+		}
+		if _, err := projectpath.Select(launchDir); err != nil {
+			return nil, err
+		}
 		return remaining, nil
 	}
 
@@ -458,7 +469,11 @@ func applyGlobalRootOptions(args []string) ([]string, error) {
 	if err := os.Chdir(roots.Project); err != nil {
 		return nil, fmt.Errorf("change to project root %q: %w", roots.Project, err)
 	}
-	projectpath.SetSetupRoot(roots.Setup)
+	if opts.SetupRoot != "" {
+		projectpath.SetSetupRoot(roots.Setup)
+	} else {
+		projectpath.ResetSetupRoot()
+	}
 
 	return remaining, nil
 }
@@ -638,6 +653,11 @@ func runWatchSubcommand(subCmd, root string) {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
+	absRoot, err = cmd.ValidateProjectPath(absRoot)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
 
 	switch subCmd {
 	case "start":
@@ -731,6 +751,10 @@ func runHandoffSubcommand(args []string) {
 
 	absRoot, err := filepath.Abs(root)
 	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+	if _, err := cmd.ValidateProjectPath(absRoot); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}

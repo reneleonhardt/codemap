@@ -344,3 +344,42 @@ func TestStoragePathsUseSetupRoot(t *testing.T) {
 		t.Fatalf("LatestPath() = %q, want %q", got, want)
 	}
 }
+
+func TestAutomaticLinkedWorktreesUseDistinctHandoffStorage(t *testing.T) {
+	projectpath.ResetSetupRoot()
+	t.Cleanup(projectpath.ResetSetupRoot)
+	primary := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(primary, ".codemap"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	makeLinked := func(name string) string {
+		gitDir := filepath.Join(primary, ".git", "worktrees", name)
+		if err := os.MkdirAll(gitDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(gitDir, "commondir"), []byte("../..\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		linked := filepath.Join(t.TempDir(), name)
+		if err := os.MkdirAll(linked, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(linked, ".git"), []byte("gitdir: "+gitDir+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		linked, _ = filepath.EvalSymlinks(linked)
+		return linked
+	}
+	linkedA := makeLinked("a")
+	linkedB := makeLinked("b")
+
+	if got, want := LatestPath(linkedA), filepath.Join(linkedA, ".codemap", latestFilename); got != want {
+		t.Fatalf("LatestPath(A) = %q, want %q", got, want)
+	}
+	if got, want := LatestPath(linkedB), filepath.Join(linkedB, ".codemap", latestFilename); got != want {
+		t.Fatalf("LatestPath(B) = %q, want %q", got, want)
+	}
+	if LatestPath(linkedA) == LatestPath(linkedB) {
+		t.Fatal("automatic linked worktrees unexpectedly share handoff storage")
+	}
+}

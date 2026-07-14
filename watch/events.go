@@ -465,7 +465,7 @@ func (d *Daemon) writeState() {
 		return
 	}
 
-	stateFile := filepath.Join(projectpath.CodemapDir(d.root), "state.json")
+	stateFile := filepath.Join(projectpath.RuntimeCodemapDir(d.root), "state.json")
 	os.WriteFile(stateFile, data, 0644)
 }
 

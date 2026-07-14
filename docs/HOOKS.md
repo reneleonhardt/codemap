@@ -47,17 +47,25 @@ Important: repo-scoped commands and managed hooks resolve the nearest git root
 automatically, so starting Claude or Codex from a nested folder still finds
 root-level setup and hook state.
 
-For a temporary or linked worktree whose untracked Codemap state remains in the
-original checkout, separate the analyzed project from its setup:
+Standard linked Git worktrees automatically inherit central config and project
+skills from their primary worktree. Create one with Git, an IDE, or any manager
+that writes standard linked-worktree metadata, then give the agent its absolute
+path:
 
 ```bash
-codemap -C /tmp/feature-worktree --setup-root /path/to/original context
+git worktree add <path> -b <branch> <base>
+codemap -C /tmp/feature-worktree context
 ```
 
-`-C`/`--project-root` selects the repository being analyzed. `--setup-root`
-selects the repository whose `.codemap` config, daemon state, skills, and
-handoffs are reused. Each value may name the repository root or a subdirectory;
-managed hook, MCP, and daemon commands preserve the recovered setup root.
+Normal CLI, hook, and plugin MCP calls need no `--setup-root`. Config and skills
+come from the primary worktree, while daemon state, events, handoffs, and
+session files remain local to the linked worktree. Tools built on standard
+linked worktrees require no special Codemap integration.
+
+Independent clones remain unrelated. Use `--setup-root /path/to/original`
+explicitly when they must share both policy and runtime state. `-C` and
+`--setup-root` may name repository roots or subdirectories; managed hook, MCP,
+and daemon commands preserve an explicit setup override.
 
 ### Manual Hook JSON (advanced)
 

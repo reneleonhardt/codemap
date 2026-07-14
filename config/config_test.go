@@ -180,6 +180,37 @@ func TestConfigPath(t *testing.T) {
 	})
 }
 
+func TestLoadUsesLinkedWorktreePrimaryConfig(t *testing.T) {
+	projectpath.ResetSetupRoot()
+	t.Cleanup(projectpath.ResetSetupRoot)
+	primary := t.TempDir()
+	gitDir := filepath.Join(primary, ".git", "worktrees", "agent")
+	if err := os.MkdirAll(gitDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(primary, ".codemap"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(primary, ".codemap", "config.json"), []byte(`{"only":["primary-only"],"depth":7}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(gitDir, "commondir"), []byte("../..\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	linked := filepath.Join(t.TempDir(), "linked")
+	if err := os.MkdirAll(linked, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(linked, ".git"), []byte("gitdir: "+gitDir+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := Load(linked)
+	if len(cfg.Only) != 1 || cfg.Only[0] != "primary-only" || cfg.Depth != 7 {
+		t.Fatalf("Load() = %#v, want primary config", cfg)
+	}
+}
+
 func TestPolicyDefaultsAndClamps(t *testing.T) {
 	t.Run("defaults for empty config", func(t *testing.T) {
 		var cfg ProjectConfig

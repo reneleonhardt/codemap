@@ -138,6 +138,11 @@ func RunSetup(args []string, defaultRoot string) int {
 		fmt.Fprintf(os.Stderr, "Error resolving path: %v\n", err)
 		return 1
 	}
+	absRoot, err = ValidateProjectPath(absRoot)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error resolving path: %v\n", err)
+		return 1
+	}
 	executable, err := resolveIntegrationExecutable()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error resolving codemap executable: %v\n", err)

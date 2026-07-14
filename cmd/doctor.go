@@ -73,6 +73,11 @@ func RunDoctor(args []string, defaultRoot string) int {
 		fmt.Fprintf(os.Stderr, "Error resolving path: %v\n", err)
 		return 1
 	}
+	root, err = ValidateProjectPath(root)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error resolving path: %v\n", err)
+		return 1
+	}
 
 	failures := 0
 	checkExecutable := func(label, name string, required bool) (bool, string) {

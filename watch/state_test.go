@@ -175,6 +175,56 @@ func TestWatchStorageUsesSetupRoot(t *testing.T) {
 	}
 }
 
+func TestAutomaticLinkedWorktreeUsesLocalWatchStorage(t *testing.T) {
+	projectpath.ResetSetupRoot()
+	t.Cleanup(projectpath.ResetSetupRoot)
+	primary := t.TempDir()
+	gitDir := filepath.Join(primary, ".git", "worktrees", "agent")
+	if err := os.MkdirAll(gitDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(primary, ".codemap"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(gitDir, "commondir"), []byte("../..\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	linked := filepath.Join(t.TempDir(), "linked")
+	if err := os.MkdirAll(filepath.Join(linked, ".codemap"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(linked, ".git"), []byte("gitdir: "+gitDir+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	linked, _ = filepath.EvalSymlinks(linked)
+
+	if err := WritePID(linked); err != nil {
+		t.Fatalf("WritePID() error: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(linked, ".codemap", "watch.pid")); err != nil {
+		t.Fatalf("linked-worktree PID missing: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(primary, ".codemap", "watch.pid")); !os.IsNotExist(err) {
+		t.Fatalf("primary PID unexpectedly created: %v", err)
+	}
+
+	d, err := NewDaemon(linked, false)
+	if err != nil {
+		t.Fatalf("NewDaemon() error: %v", err)
+	}
+	defer d.watcher.Close()
+	if want := filepath.Join(linked, ".codemap", "events.log"); d.eventLog != want {
+		t.Fatalf("eventLog = %q, want %q", d.eventLog, want)
+	}
+	d.WriteInitialState()
+	if _, err := os.Stat(filepath.Join(linked, ".codemap", "state.json")); err != nil {
+		t.Fatalf("linked-worktree state missing: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(primary, ".codemap", "state.json")); !os.IsNotExist(err) {
+		t.Fatalf("primary state unexpectedly created: %v", err)
+	}
+}
+
 func TestProcessAliveDetectsLiveAndDeadPIDs(t *testing.T) {
 	if !processAlive(os.Getpid()) {
 		t.Fatal("current process should be reported alive")
