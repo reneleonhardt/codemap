@@ -1,0 +1,61 @@
+name: Integration artifacts
+
+on:
+  push:
+    branches:
+      - fork/integrate
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: integration-artifacts-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build unpublished release artifacts
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    env:
+      GOTOOLCHAIN: local
+    steps:
+      - name: Check out integration source
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Set up latest Go 1.26
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.26.x'
+          check-latest: true
+          cache-dependency-path: go.sum
+
+      - name: Verify Go 1.26
+        run: go version | grep -Eq 'go1\.26([.]|[[:space:]])'
+
+      - name: Build GoReleaser snapshot
+        uses: goreleaser/goreleaser-action@v7
+        with:
+          distribution: goreleaser
+          version: '~> v2'
+          # Empty release notes skip unused changelog generation in snapshot mode.
+          args: release --snapshot --clean --release-notes /dev/null --config .goreleaser.full.yml
+
+      - name: Upload integration artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: codemap-integration-${{ github.sha }}
+          path: |
+            dist/*.tar.gz
+            dist/*.zip
+            dist/checksums.txt
+            dist/artifacts.json
+            dist/metadata.json
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
