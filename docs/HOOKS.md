@@ -368,6 +368,9 @@ codemap handoff --delta .     # dynamic delta layer only
 codemap handoff --detail a.go . # lazy-load full detail for one changed file
 ```
 
+The stable prefix file count honors the active `.codemap/config.json` filters,
+including when live watch state tracks a broader working set.
+
 ---
 
 ## Why This Matters

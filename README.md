@@ -325,7 +325,7 @@ codemap handoff --no-save .       # Build/read without writing artifacts
 ```
 
 What it captures (layered for cache reuse):
-- `prefix` (stable): hub summaries + repo file-count context
+- `prefix` (stable): hub summaries + configured file-count context (honors `.codemap/config.json`)
 - `delta` (dynamic): changed file stubs (`path`, `hash`, `status`, `size`), risk files, recent events, next steps
 - deterministic hashes: `prefix_hash`, `delta_hash`, `combined_hash`
 - cache metrics: reuse ratio + unchanged bytes vs previous handoff
