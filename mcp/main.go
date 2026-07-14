@@ -8,6 +8,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -16,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"codemap/config"
 	"codemap/handoff"
 	"codemap/internal/buildinfo"
 	"codemap/internal/projectpath"
@@ -102,9 +104,21 @@ type PathInput struct {
 	Depth int    `json:"depth,omitempty" jsonschema:"Optional tree depth (0 = adaptive default)"`
 }
 
+type DependenciesInput struct {
+	Path string `json:"path,omitempty" jsonschema:"Path to the project directory to analyze; omit to use the single advertised MCP root"`
+}
+
+type SkillsListInput struct {
+	Path string `json:"path" jsonschema:"Path to the project directory"`
+}
+
+type StatusInput struct {
+	Path string `json:"path,omitempty" jsonschema:"Optional project path whose effective Codemap roots should be reported"`
+}
+
 type DiffInput struct {
 	Path string `json:"path" jsonschema:"Path to the project directory to analyze"`
-	Ref  string `json:"ref,omitempty" jsonschema:"Git branch/ref to compare against (default: main)"`
+	Ref  string `json:"ref,omitempty" jsonschema:"Git branch/ref to compare against (default: auto-detected)"`
 }
 
 type FindInput struct {
@@ -139,7 +153,7 @@ type SkillInput struct {
 type HandoffInput struct {
 	Path   string `json:"path" jsonschema:"Path to the project directory"`
 	Since  string `json:"since,omitempty" jsonschema:"Look back window for recent events (Go duration, e.g. 2h, 30m)"`
-	Ref    string `json:"ref,omitempty" jsonschema:"Git base ref for diff (default: main)"`
+	Ref    string `json:"ref,omitempty" jsonschema:"Git base ref for diff (default: auto-detected)"`
 	Latest bool   `json:"latest,omitempty" jsonschema:"Read latest saved handoff artifact instead of generating a new one"`
 	Save   bool   `json:"save,omitempty" jsonschema:"When true, persist generated artifact to .codemap/handoff.latest.json"`
 	JSON   bool   `json:"json,omitempty" jsonschema:"Return raw JSON output"`
@@ -150,115 +164,47 @@ type HandoffInput struct {
 
 func NewServer(options RuntimeOptions) *mcp.Server {
 	guidance := options.upgradeGuidance()
-
+	var registeredTools []string
 	server := mcp.NewServer(&mcp.Implementation{
 		Name:    "codemap",
 		Version: buildinfo.Current(),
 	}, &mcp.ServerOptions{Instructions: guidance})
+	tool := func(name, description string, annotations *mcp.ToolAnnotations) *mcp.Tool {
+		registeredTools = append(registeredTools, name)
+		return &mcp.Tool{Name: name, Description: description, Annotations: annotations}
+	}
+	readOnly := closedReadOnlyAnnotations()
+	nonDestructive := closedNonDestructiveAnnotations()
 
-	// Tool: get_structure - Get project tree view
-	mcp.AddTool(server, &mcp.Tool{
-		Name:        "get_structure",
-		Description: "Get the project structure as a tree view. Shows files organized by directory with language detection, file sizes, and highlights the top 5 largest source files. Use this to understand how a codebase is organized.",
-	}, handleGetStructure)
-
-	// Tool: get_dependencies - Get dependency graph
-	mcp.AddTool(server, &mcp.Tool{
-		Name:        "get_dependencies",
-		Description: "Get the dependency flow of a project. Shows external dependencies by language, internal import chains between files, hub files (most-imported), and function counts. Use this to understand how code connects and which files are most critical.",
-	}, handleGetDependencies)
-
-	// Tool: get_diff - Get changed files with impact analysis
-	mcp.AddTool(server, &mcp.Tool{
-		Name:        "get_diff",
-		Description: "Get files changed compared to a git branch, with line counts and impact analysis showing which changed files are imported by others. Use this to understand what work has been done and what might break.",
-	}, handleGetDiff)
-
-	// Tool: find_file - Find files by pattern
-	mcp.AddTool(server, &mcp.Tool{
-		Name:        "find_file",
-		Description: "Find files in a project matching a name pattern. Returns file paths with their sizes and languages.",
-	}, handleFindFile)
-
-	// Tool: get_importers - Find what imports a file
-	mcp.AddTool(server, &mcp.Tool{
-		Name:        "get_importers",
-		Description: "Find all files that import/depend on a specific file. Use this to understand the impact of changing a file.",
-	}, handleGetImporters)
-
-	// Tool: status - Verify MCP connection
-	mcp.AddTool(server, &mcp.Tool{
-		Name:        "status",
-		Description: "Check codemap MCP server status. Returns version and confirms local filesystem access is available.",
-	}, statusHandler(guidance))
-
-	// Tool: list_projects - Discover projects in a directory
-	mcp.AddTool(server, &mcp.Tool{
-		Name:        "list_projects",
-		Description: "List project directories under a parent path. Use this to discover projects when you only know the general location (e.g., ~/Code) but not the exact folder name. Optionally filter by pattern to find specific projects. Returns directory names with file counts and primary language.",
-	}, handleListProjects)
-
-	// === LIVE WATCH TOOLS ===
-
-	// Tool: start_watch - Start watching a project
-	mcp.AddTool(server, &mcp.Tool{
-		Name:        "start_watch",
-		Description: "Start live file watching for a project. Tracks file changes in real-time with timestamps, line deltas, and git status. The watcher runs in background - use get_activity to see what's happening.",
-	}, handleStartWatch)
-
-	// Tool: stop_watch - Stop watching a project
-	mcp.AddTool(server, &mcp.Tool{
-		Name:        "stop_watch",
-		Description: "Stop the live file watcher for a project.",
-	}, handleStopWatch)
-
-	// Tool: get_activity - Get recent coding activity
-	mcp.AddTool(server, &mcp.Tool{
-		Name:        "get_activity",
-		Description: "Get recent coding activity for a watched project. Shows what files were edited, when, and how much changed. Use this to understand what the user has been working on. Returns hot files, recent changes, and session summary.",
-	}, handleGetActivity)
-
-	// === FILE GRAPH TOOLS ===
-
-	// Tool: get_hubs - Get critical hub files
-	mcp.AddTool(server, &mcp.Tool{
-		Name:        "get_hubs",
-		Description: "Get all hub files in a project (files imported by 3+ other files). These are the critical files where changes have the most impact. Use this before making changes to understand what's important.",
-	}, handleGetHubs)
-
-	// Tool: get_file_context - Get full context for a file
-	mcp.AddTool(server, &mcp.Tool{
-		Name:        "get_file_context",
-		Description: "Get complete dependency context for a specific file: what it imports, what imports it, whether it's a hub, and all connected files. Use this before editing a file to understand its role in the codebase.",
-	}, handleGetFileContext)
-
-	// Tool: get_handoff - Build/read cross-agent handoff artifact
-	mcp.AddTool(server, &mcp.Tool{
-		Name:        "get_handoff",
-		Description: "Build or read a layered handoff artifact for agent switching. Prefix = stable project context, delta = recent work. Supports lazy per-file detail via file=<path>. Set save=true to persist generated artifacts.",
-	}, handleGetHandoff)
-
-	// Tool: get_working_set - Get current session's working set
-	mcp.AddTool(server, &mcp.Tool{
-		Name:        "get_working_set",
-		Description: "Get the current session's working set: files actively being edited, ranked by edit frequency. Shows edit count, net line delta, hub status, and importer count per file. Use this to understand what the user is actively working on right now.",
-	}, handleGetWorkingSet)
-
-	// === SKILLS TOOLS ===
-
-	// Tool: list_skills - List available skills (metadata only)
-	mcp.AddTool(server, &mcp.Tool{
-		Name:        "list_skills",
-		Description: "List all available skills with their names, descriptions, keywords, and source (builtin/project/global). Returns metadata only — use get_skill for full instructions.",
-	}, handleListSkills)
-
-	// Tool: get_skill - Get full skill instructions
-	mcp.AddTool(server, &mcp.Tool{
-		Name:        "get_skill",
-		Description: "Load the full instructions for a specific skill by name. Returns the complete markdown body with step-by-step guidance. Use after list_skills to get detailed guidance for a task.",
-	}, handleGetSkill)
+	mcp.AddTool(server, tool("get_structure", "Get the project structure as a tree view. Shows files organized by directory with language detection, file sizes, and highlights the top 5 largest source files. Use this to understand how a codebase is organized.", readOnly), handleGetStructure)
+	mcp.AddTool(server, tool("get_dependencies", "Get the dependency flow of a project. Shows external dependencies by language, internal import chains between files, hub files (most-imported), and function counts. Use this to understand how code connects and which files are most critical.", readOnly), handleGetDependencies)
+	mcp.AddTool(server, tool("get_diff", "Get files changed compared to a git branch, with line counts and impact analysis showing which changed files are imported by others. Use this to understand what work has been done and what might break.", readOnly), handleGetDiff)
+	mcp.AddTool(server, tool("find_file", "Find files in a project matching a name pattern. Returns file paths with their sizes and languages.", readOnly), handleFindFile)
+	mcp.AddTool(server, tool("get_importers", "Find all files that import/depend on a specific file. Use this to understand the impact of changing a file.", readOnly), handleGetImporters)
+	mcp.AddTool(server, tool("status", "Check codemap MCP server status. Returns version, registered tools, and optional effective project roots.", readOnly), statusHandler(guidance, func() []string { return registeredTools }))
+	mcp.AddTool(server, tool("list_projects", "List project directories under a parent path. Optionally filter by pattern. Returns directory names with file counts and primary language.", readOnly), handleListProjects)
+	mcp.AddTool(server, tool("start_watch", "Start live file watching for a project. The watcher runs in background; use get_activity to inspect changes.", nonDestructive), handleStartWatch)
+	mcp.AddTool(server, tool("stop_watch", "Stop the live file watcher for a project.", nonDestructive), handleStopWatch)
+	mcp.AddTool(server, tool("get_activity", "Get recent coding activity for a watched project, including hot files, recent changes, and a session summary.", readOnly), handleGetActivity)
+	mcp.AddTool(server, tool("get_hubs", "Get all hub files in a project (files imported by 3+ other files). Use this before making changes to understand high-impact files.", readOnly), handleGetHubs)
+	mcp.AddTool(server, tool("get_file_context", "Get complete dependency context for a file: imports, importers, hub status, and connected files.", readOnly), handleGetFileContext)
+	mcp.AddTool(server, tool("get_handoff", "Build or read a layered handoff artifact for agent switching. Set save=true to persist generated artifacts.", nil), handleGetHandoff)
+	mcp.AddTool(server, tool("get_working_set", "Get the current session's working set, ranked by edit frequency with hub and importer metadata.", readOnly), handleGetWorkingSet)
+	mcp.AddTool(server, tool("list_skills", "List all available skills with metadata only; use get_skill for full instructions.", readOnly), handleListSkills)
+	mcp.AddTool(server, tool("get_skill", "Load the full instructions for a specific skill by name.", readOnly), handleGetSkill)
 
 	return server
+}
+
+func closedReadOnlyAnnotations() *mcp.ToolAnnotations {
+	closed := false
+	return &mcp.ToolAnnotations{ReadOnlyHint: true, OpenWorldHint: &closed}
+}
+
+func closedNonDestructiveAnnotations() *mcp.ToolAnnotations {
+	nonDestructive := false
+	closed := false
+	return &mcp.ToolAnnotations{DestructiveHint: &nonDestructive, OpenWorldHint: &closed}
 }
 
 func Run(ctx context.Context, options RuntimeOptions) error {
@@ -294,6 +240,57 @@ func validateProjectPath(path string) (string, *mcp.CallToolResult) {
 		return "", errorResult("Invalid project path: " + err.Error())
 	}
 	return absPath, nil
+}
+
+func resolveDependenciesPath(ctx context.Context, req *mcp.CallToolRequest, explicitPath string) (string, *mcp.CallToolResult) {
+	if explicitPath != "" {
+		absRoot, invalid := validateProjectPath(explicitPath)
+		if invalid != nil {
+			return "", invalid
+		}
+		info, err := os.Stat(absRoot)
+		if err != nil || !info.IsDir() {
+			return "", errorResult("Invalid project path: path is not an accessible directory")
+		}
+		return absRoot, nil
+	}
+	if req == nil || req.Session == nil {
+		return "", errorResult("path is required: no MCP client session is available to provide roots")
+	}
+	params := req.Session.InitializeParams()
+	// In go-sdk v1.1.0 roots:{} is indistinguishable from an absent roots
+	// capability, so require the positive ListChanged signal before roots/list.
+	if params == nil || params.Capabilities == nil || !params.Capabilities.Roots.ListChanged {
+		return "", errorResult("path is required: client did not advertise roots listChanged support")
+	}
+	listed, err := req.Session.ListRoots(ctx, nil)
+	if err != nil {
+		return "", errorResult("path is required: unable to list client roots: " + err.Error())
+	}
+	if len(listed.Roots) != 1 {
+		return "", errorResult(fmt.Sprintf("path is required: client advertised %d roots; provide one explicit project path", len(listed.Roots)))
+	}
+	return resolveSingleClientRoot(listed.Roots[0])
+}
+
+func resolveSingleClientRoot(root *mcp.Root) (string, *mcp.CallToolResult) {
+	if root == nil {
+		return "", errorResult("path is required: the single client root is missing")
+	}
+
+	rootURI, err := url.Parse(root.URI)
+	if err != nil || rootURI.Scheme != "file" || (rootURI.Host != "" && rootURI.Host != "localhost") {
+		return "", errorResult("path is required: the single client root is not an absolute local file URI")
+	}
+	rootPath, err := url.PathUnescape(rootURI.EscapedPath())
+	if err != nil || !filepath.IsAbs(rootPath) {
+		return "", errorResult("path is required: the single client root is not an absolute local file URI")
+	}
+	info, err := os.Stat(rootPath)
+	if err != nil || !info.IsDir() {
+		return "", errorResult("path is required: the single client root is not an accessible directory")
+	}
+	return validateProjectPath(filepath.FromSlash(rootPath))
 }
 
 func handleGetStructure(ctx context.Context, req *mcp.CallToolRequest, input PathInput) (*mcp.CallToolResult, any, error) {
@@ -341,7 +338,10 @@ func handleGetStructure(ctx context.Context, req *mcp.CallToolRequest, input Pat
 		hubs = append(hubs, state.Hubs...)
 		importers = state.Importers
 	} else if fileCount <= limits.LargeRepoFileCount {
-		fg, err := scanner.BuildFileGraph(absRoot)
+		fg, err := scanner.BuildFileGraphContext(ctx, absRoot)
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, nil, ctxErr
+		}
 		if err == nil {
 			hubs = fg.HubFiles()
 			importers = fg.Importers
@@ -367,22 +367,32 @@ func handleGetStructure(ctx context.Context, req *mcp.CallToolRequest, input Pat
 	return textResult(output), nil, nil
 }
 
-func handleGetDependencies(ctx context.Context, req *mcp.CallToolRequest, input PathInput) (*mcp.CallToolResult, any, error) {
-	absRoot, invalid := validateProjectPath(input.Path)
+func handleGetDependencies(ctx context.Context, req *mcp.CallToolRequest, input DependenciesInput) (*mcp.CallToolResult, any, error) {
+	absRoot, invalid := resolveDependenciesPath(ctx, req, input.Path)
 	if invalid != nil {
 		return invalid, nil, nil
 	}
 
-	analyses, err := scanner.ScanForDeps(absRoot)
+	analyses, err := scanner.ScanForDepsContext(ctx, absRoot)
 	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, nil, ctxErr
+		}
 		return errorResult("Scan error: " + err.Error()), nil, nil
+	}
+	externalDeps, err := scanner.ReadExternalDepsContext(ctx, absRoot)
+	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, nil, ctxErr
+		}
+		return errorResult("External dependency scan error: " + err.Error()), nil, nil
 	}
 
 	depsProject := scanner.DepsProject{
 		Root:         absRoot,
 		Mode:         "deps",
 		Files:        analyses,
-		ExternalDeps: scanner.ReadExternalDeps(absRoot),
+		ExternalDeps: externalDeps,
 	}
 
 	var buf bytes.Buffer
@@ -393,14 +403,13 @@ func handleGetDependencies(ctx context.Context, req *mcp.CallToolRequest, input 
 }
 
 func handleGetDiff(ctx context.Context, req *mcp.CallToolRequest, input DiffInput) (*mcp.CallToolResult, any, error) {
-	ref := input.Ref
-	if ref == "" {
-		ref = "main"
-	}
-
 	absRoot, invalid := validateProjectPath(input.Path)
 	if invalid != nil {
 		return invalid, nil, nil
+	}
+	ref := input.Ref
+	if ref == "" {
+		ref = scanner.DefaultBaseRef(absRoot)
 	}
 
 	diffInfo, err := scanner.GitDiffInfo(absRoot, ref)
@@ -419,7 +428,13 @@ func handleGetDiff(ctx context.Context, req *mcp.CallToolRequest, input DiffInpu
 	}
 
 	files = scanner.FilterToChangedWithInfo(files, diffInfo)
-	impact := scanner.AnalyzeImpact(absRoot, files)
+	impact, err := scanner.AnalyzeImpactContext(ctx, absRoot, files)
+	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, nil, ctxErr
+		}
+		return errorResult("Impact scan error: " + err.Error()), nil, nil
+	}
 
 	project := scanner.Project{
 		Root:    absRoot,
@@ -463,7 +478,11 @@ func handleFindFile(ctx context.Context, req *mcp.CallToolRequest, input FindInp
 // EmptyInput for tools that don't need parameters
 type EmptyInput struct{}
 
-func handleStatus(ctx context.Context, req *mcp.CallToolRequest, input EmptyInput) (*mcp.CallToolResult, any, error) {
+func handleStatus(ctx context.Context, req *mcp.CallToolRequest, input StatusInput) (*mcp.CallToolResult, any, error) {
+	return handleStatusWithTools(ctx, req, input, nil)
+}
+
+func handleStatusWithTools(ctx context.Context, req *mcp.CallToolRequest, input StatusInput, registeredToolNames []string) (*mcp.CallToolResult, any, error) {
 	cwd, _ := os.Getwd()
 	home := os.Getenv("HOME")
 
@@ -481,31 +500,39 @@ func handleStatus(ctx context.Context, req *mcp.CallToolRequest, input EmptyInpu
 		watchStatus = fmt.Sprintf("%d active: %s", activeWatchers, strings.Join(watchedPaths, ", "))
 	}
 
-	return textResult(fmt.Sprintf(`codemap MCP server v%s
+	var projectStatus string
+	if input.Path != "" {
+		absRoot, invalid := validateProjectPath(input.Path)
+		if invalid != nil {
+			return invalid, nil, nil
+		}
+		selection, err := projectpath.Select(absRoot)
+		if err != nil {
+			return errorResult("Invalid project path: " + err.Error()), nil, nil
+		}
+		projectStatus = fmt.Sprintf(`
+Project root: %s
+Setup root: %s
+Runtime root: %s
+Config root: %s
+Selection source: %s
+Config path: %s
+`, selection.ProjectRoot, selection.SetupRoot, selection.RuntimeRoot, selection.SetupRoot, selection.Source, config.ConfigPath(absRoot))
+	}
+
+	return textResult(fmt.Sprintf(`codemap MCP server %s
 Status: connected
 Local filesystem access: enabled
 Working directory: %s
 Home directory: %s
 Active watchers: %s
-
-Available tools:
-  list_projects    - Discover projects in a directory
-  get_structure    - Project tree view
-  get_dependencies - Import/function analysis
-  get_diff         - Changed files vs branch
-  find_file        - Search by filename
-  get_importers    - Find what imports a file
-  get_handoff      - Build/read cross-agent handoff summary
-
-Live watch tools:
-  start_watch      - Start watching a project for changes
-  stop_watch       - Stop watching a project
-  get_activity     - See recent coding activity (hot files, edits, timeline)`, buildinfo.Current(), cwd, home, watchStatus)), nil, nil
+%s
+Available tools (%d): %s`, buildinfo.Current(), cwd, home, watchStatus, projectStatus, len(registeredToolNames), strings.Join(registeredToolNames, ", "))), nil, nil
 }
 
-func statusHandler(guidance string) func(context.Context, *mcp.CallToolRequest, EmptyInput) (*mcp.CallToolResult, any, error) {
-	return func(ctx context.Context, req *mcp.CallToolRequest, input EmptyInput) (*mcp.CallToolResult, any, error) {
-		result, output, err := handleStatus(ctx, req, input)
+func statusHandler(guidance string, registeredToolNames func() []string) func(context.Context, *mcp.CallToolRequest, StatusInput) (*mcp.CallToolResult, any, error) {
+	return func(ctx context.Context, req *mcp.CallToolRequest, input StatusInput) (*mcp.CallToolResult, any, error) {
+		result, output, err := handleStatusWithTools(ctx, req, input, registeredToolNames())
 		if err != nil || guidance == "" {
 			return result, output, err
 		}
@@ -621,8 +648,11 @@ func handleGetImporters(ctx context.Context, req *mcp.CallToolRequest, input Imp
 	if invalid != nil {
 		return invalid, nil, nil
 	}
-	fg, err := scanner.BuildFileGraph(absRoot)
+	fg, err := scanner.BuildFileGraphContext(ctx, absRoot)
 	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, nil, ctxErr
+		}
 		return errorResult("Failed to build file graph: " + err.Error()), nil, nil
 	}
 
@@ -662,9 +692,6 @@ func handleGetHandoff(ctx context.Context, req *mcp.CallToolRequest, input Hando
 		}
 	} else {
 		baseRef := input.Ref
-		if baseRef == "" {
-			baseRef = handoff.DefaultBaseRef
-		}
 		since := handoff.DefaultSince
 		if input.Since != "" {
 			since, err = time.ParseDuration(input.Since)
@@ -978,8 +1005,11 @@ func handleGetHubs(ctx context.Context, req *mcp.CallToolRequest, input PathInpu
 	if invalid != nil {
 		return invalid, nil, nil
 	}
-	fg, err := scanner.BuildFileGraph(absRoot)
+	fg, err := scanner.BuildFileGraphContext(ctx, absRoot)
 	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, nil, ctxErr
+		}
 		return errorResult("Failed to build file graph: " + err.Error()), nil, nil
 	}
 
@@ -1018,8 +1048,11 @@ func handleGetFileContext(ctx context.Context, req *mcp.CallToolRequest, input I
 	if invalid != nil {
 		return invalid, nil, nil
 	}
-	fg, err := scanner.BuildFileGraph(absRoot)
+	fg, err := scanner.BuildFileGraphContext(ctx, absRoot)
 	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, nil, ctxErr
+		}
 		return errorResult("Failed to build file graph: " + err.Error()), nil, nil
 	}
 
@@ -1101,7 +1134,7 @@ func handleGetWorkingSet(ctx context.Context, req *mcp.CallToolRequest, input Wa
 }
 
 // handleListSkills returns metadata for all available skills
-func handleListSkills(ctx context.Context, req *mcp.CallToolRequest, input PathInput) (*mcp.CallToolResult, any, error) {
+func handleListSkills(ctx context.Context, req *mcp.CallToolRequest, input SkillsListInput) (*mcp.CallToolResult, any, error) {
 	absPath, invalid := validateProjectPath(input.Path)
 	if invalid != nil {
 		return invalid, nil, nil

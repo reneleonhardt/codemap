@@ -31,6 +31,7 @@ func waitForWatchCondition(t *testing.T, timeout time.Duration, cond func() bool
 
 func runGitWatchTestCmd(t *testing.T, dir string, args ...string) {
 	t.Helper()
+	args = append([]string{"-c", "commit.gpgsign=false"}, args...)
 	cmd := exec.Command("git", args...)
 	cmd.Dir = dir
 	if out, err := cmd.CombinedOutput(); err != nil {

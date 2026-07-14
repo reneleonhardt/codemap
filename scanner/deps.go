@@ -1,6 +1,7 @@
 package scanner
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -8,10 +9,22 @@ import (
 
 // ReadExternalDeps reads manifest files (go.mod, requirements.txt, package.json)
 func ReadExternalDeps(root string) map[string][]string {
+	deps, _ := ReadExternalDepsContext(context.Background(), root)
+	if deps == nil {
+		return make(map[string][]string)
+	}
+	return deps
+}
+
+// ReadExternalDepsContext reads manifest dependencies while honoring cancellation.
+func ReadExternalDepsContext(ctx context.Context, root string) (map[string][]string, error) {
 	deps := make(map[string][]string)
 
 	// Walk tree to find all manifest files
-	filepath.Walk(root, func(path string, info os.FileInfo, _ error) error {
+	err := filepath.Walk(root, func(path string, info os.FileInfo, _ error) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if info == nil {
 			return nil
 		}
@@ -61,7 +74,10 @@ func ReadExternalDeps(root string) map[string][]string {
 	for k, v := range deps {
 		deps[k] = dedupe(v)
 	}
-	return deps
+	if err != nil {
+		return nil, err
+	}
+	return deps, nil
 }
 
 func parseGoMod(c string) (deps []string) {

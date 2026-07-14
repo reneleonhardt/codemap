@@ -1,12 +1,51 @@
 package scanner
 
 import (
+	"context"
 	"fmt"
 	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
 )
+
+// DefaultBaseRef returns the best available ref for branch comparisons.
+func DefaultBaseRef(root string) string {
+	if remoteDefault, ok := gitSymbolicRef(root, "refs/remotes/origin/HEAD"); ok && remoteDefault != "" {
+		if gitRefExists(root, remoteDefault) {
+			return remoteDefault
+		}
+	}
+
+	for _, ref := range []string{"main", "master", "trunk", "develop"} {
+		if gitRefExists(root, ref) {
+			return ref
+		}
+	}
+	for _, ref := range []string{"origin/main", "origin/master", "origin/trunk", "origin/develop"} {
+		if gitRefExists(root, ref) {
+			return ref
+		}
+	}
+	return "HEAD"
+}
+
+func gitRefExists(root, ref string) bool {
+	cmd := exec.Command("git", "rev-parse", "--verify", "--quiet", ref)
+	cmd.Dir = root
+	return cmd.Run() == nil
+}
+
+func gitSymbolicRef(root, ref string) (string, bool) {
+	cmd := exec.Command("git", "symbolic-ref", "--quiet", "--short", ref)
+	cmd.Dir = root
+	out, err := cmd.Output()
+	if err != nil {
+		return "", false
+	}
+	value := strings.TrimSpace(string(out))
+	return value, value != ""
+}
 
 // DiffInfo holds all diff-related data for changed files
 type DiffInfo struct {
@@ -166,16 +205,22 @@ type ImpactInfo struct {
 // AnalyzeImpact checks which changed files are imported by other files
 // Uses ast-grep to extract actual imports for accuracy
 func AnalyzeImpact(root string, changedFiles []FileInfo) []ImpactInfo {
+	impact, _ := AnalyzeImpactContext(context.Background(), root, changedFiles)
+	return impact
+}
+
+// AnalyzeImpactContext analyzes impact while honoring cancellation.
+func AnalyzeImpactContext(ctx context.Context, root string, changedFiles []FileInfo) ([]ImpactInfo, error) {
 	if len(changedFiles) == 0 {
-		return nil
+		return nil, nil
 	}
 
 	// Scan all files to get their imports using ast-grep
-	analyses, err := ScanForDeps(root)
+	analyses, err := ScanForDepsContext(ctx, root)
 	if err != nil {
-		return nil
+		return nil, err
 	}
-	return AnalyzeImpactFromAnalyses(changedFiles, analyses)
+	return AnalyzeImpactFromAnalyses(changedFiles, analyses), nil
 }
 
 // AnalyzeImpactFromAnalyses computes impact using a pre-computed ast-grep scan,

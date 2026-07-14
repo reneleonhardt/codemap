@@ -33,6 +33,7 @@ func withWatcherRegistry(t *testing.T) {
 
 func runGitMCPTestCmd(t *testing.T, dir string, args ...string) {
 	t.Helper()
+	args = append([]string{"-c", "commit.gpgsign=false"}, args...)
 	cmd := exec.Command("git", args...)
 	cmd.Dir = dir
 	if out, err := cmd.CombinedOutput(); err != nil {
@@ -97,7 +98,7 @@ func TestHandleGetDependenciesAndDiff(t *testing.T) {
 		t.Fatalf("expected diff output to mention changed file, got:\n%s", out)
 	}
 
-	res, _, err = handleGetDependencies(context.Background(), nil, PathInput{Path: root})
+	res, _, err = handleGetDependencies(context.Background(), nil, DependenciesInput{Path: root})
 	if err != nil {
 		t.Fatalf("handleGetDependencies error: %v", err)
 	}
@@ -175,7 +176,7 @@ func TestMCPScansRespectConfiguredFilters(t *testing.T) {
 		t.Fatalf("unexpected filtered diff:\n%s", diffOut)
 	}
 
-	deps, _, err := handleGetDependencies(context.Background(), nil, PathInput{Path: root})
+	deps, _, err := handleGetDependencies(context.Background(), nil, DependenciesInput{Path: root})
 	if err != nil {
 		t.Fatalf("handleGetDependencies error: %v", err)
 	}

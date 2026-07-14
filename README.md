@@ -114,7 +114,7 @@ Optional helper scripts (mainly for contributors running from this repo):
 
 ```bash
 codemap .          # Fast tree/context view (respects .codemap/config.json)
-codemap --diff     # What changed vs main
+codemap --diff     # What changed vs the auto-detected default branch
 codemap handoff .  # Save layered handoff for cross-agent continuation
 codemap --deps .   # Dependency flow (requires ast-grep)
 codemap skill list # Show available skills
@@ -169,7 +169,7 @@ paths resolve from the project root.
 | `--depth, -d <n>` | Limit tree depth (0 = unlimited) |
 | `--only <exts>` | Only show files with these extensions |
 | `--exclude <patterns>` | Exclude files matching patterns |
-| `--diff` | Show files changed vs main branch |
+| `--diff` | Show files changed vs the auto-detected default branch |
 | `--ref <branch>` | Branch to compare against (with --diff) |
 | `--deps` | Dependency flow mode |
 | `--importers <file>` | Check who imports a file |

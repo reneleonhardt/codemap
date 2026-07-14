@@ -29,7 +29,60 @@ func setupGitRepo(t *testing.T) string {
 	cmd.Dir = tmpDir
 	cmd.Run()
 
+	cmd = exec.Command("git", "config", "commit.gpgsign", "false")
+	cmd.Dir = tmpDir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("disable commit signing: %v\n%s", err, out)
+	}
+
 	return tmpDir
+}
+
+func runGitScannerTestCmd(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	args = append([]string{"-c", "commit.gpgsign=false"}, args...)
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git %v failed: %v\n%s", args, err, out)
+	}
+}
+
+func makeGitRepoOnBranch(t *testing.T, branch string) string {
+	t.Helper()
+	root := setupGitRepo(t)
+	if err := os.WriteFile(filepath.Join(root, "file.go"), []byte("package fixture\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGitScannerTestCmd(t, root, "add", ".")
+	runGitScannerTestCmd(t, root, "commit", "-m", "initial")
+	runGitScannerTestCmd(t, root, "branch", "-M", branch)
+	return root
+}
+
+func TestDefaultBaseRef(t *testing.T) {
+	t.Run("prefers origin HEAD", func(t *testing.T) {
+		root := makeGitRepoOnBranch(t, "master")
+		runGitScannerTestCmd(t, root, "update-ref", "refs/remotes/origin/main", "HEAD")
+		runGitScannerTestCmd(t, root, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
+		if got := DefaultBaseRef(root); got != "origin/main" {
+			t.Fatalf("DefaultBaseRef() = %q, want origin/main", got)
+		}
+	})
+
+	t.Run("uses known local branch", func(t *testing.T) {
+		root := makeGitRepoOnBranch(t, "master")
+		if got := DefaultBaseRef(root); got != "master" {
+			t.Fatalf("DefaultBaseRef() = %q, want master", got)
+		}
+	})
+
+	t.Run("falls back to HEAD", func(t *testing.T) {
+		root := makeGitRepoOnBranch(t, "feature")
+		if got := DefaultBaseRef(root); got != "HEAD" {
+			t.Fatalf("DefaultBaseRef() = %q, want HEAD", got)
+		}
+	})
 }
 
 func TestDiffStat(t *testing.T) {

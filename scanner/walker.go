@@ -2,6 +2,7 @@ package scanner
 
 import (
 	"bufio"
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -227,10 +228,18 @@ func LoadGitignore(root string) *ignore.GitIgnore {
 // only: list of extensions to include (empty = all)
 // exclude: list of patterns to exclude
 func ScanFiles(root string, cache *GitIgnoreCache, only []string, exclude []string) ([]FileInfo, error) {
+	return ScanFilesContext(context.Background(), root, cache, only, exclude)
+}
+
+// ScanFilesContext walks the directory tree while honoring cancellation.
+func ScanFilesContext(ctx context.Context, root string, cache *GitIgnoreCache, only []string, exclude []string) ([]FileInfo, error) {
 	var files []FileInfo
 	absRoot, _ := filepath.Abs(root)
 
 	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
 		if err != nil {
 			return err
 		}
@@ -290,34 +299,58 @@ func ScanFiles(root string, cache *GitIgnoreCache, only []string, exclude []stri
 
 		return nil
 	})
+	if err == nil {
+		err = ctx.Err()
+	}
 
 	return files, err
 }
 
 // ScanConfiguredFiles scans using the active setup root's project filters.
 func ScanConfiguredFiles(root string, cache *GitIgnoreCache) ([]FileInfo, error) {
+	return ScanConfiguredFilesContext(context.Background(), root, cache)
+}
+
+// ScanConfiguredFilesContext scans configured files while honoring cancellation.
+func ScanConfiguredFilesContext(ctx context.Context, root string, cache *GitIgnoreCache) ([]FileInfo, error) {
 	cfg := config.Load(root)
-	return ScanFiles(root, cache, cfg.Only, cfg.Exclude)
+	return ScanFilesContext(ctx, root, cache, cfg.Only, cfg.Exclude)
 }
 
 func filterConfiguredAnalyses(root string, analyses []FileAnalysis) []FileAnalysis {
+	filtered, _ := filterConfiguredAnalysesContext(context.Background(), root, analyses)
+	return filtered
+}
+
+func filterConfiguredAnalysesContext(ctx context.Context, root string, analyses []FileAnalysis) ([]FileAnalysis, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	cfg := config.Load(root)
 	if len(cfg.Only) == 0 && len(cfg.Exclude) == 0 {
-		return analyses
+		return analyses, ctx.Err()
 	}
 
 	filtered := make([]FileAnalysis, 0, len(analyses))
 	for _, analysis := range analyses {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		path := filepath.ToSlash(analysis.Path)
 		if MatchesFilters(path, filepath.Ext(path), cfg.Only, cfg.Exclude) {
 			filtered = append(filtered, analysis)
 		}
 	}
-	return filtered
+	return filtered, ctx.Err()
 }
 
 // ScanForDeps uses ast-grep for batched dependency analysis.
 func ScanForDeps(root string) ([]FileAnalysis, error) {
+	return ScanForDepsContext(context.Background(), root)
+}
+
+// ScanForDepsContext performs dependency analysis while honoring cancellation.
+func ScanForDepsContext(ctx context.Context, root string) ([]FileAnalysis, error) {
 	astScanner, err := NewAstGrepScanner()
 	if err != nil {
 		return nil, err
@@ -328,9 +361,9 @@ func ScanForDeps(root string) ([]FileAnalysis, error) {
 		return nil, ErrAstGrepNotFound
 	}
 
-	analyses, err := astScanner.ScanDirectory(root)
+	analyses, err := astScanner.ScanDirectoryContext(ctx, root)
 	if err != nil {
 		return nil, err
 	}
-	return filterConfiguredAnalyses(root, analyses), nil
+	return filterConfiguredAnalysesContext(ctx, root, analyses)
 }

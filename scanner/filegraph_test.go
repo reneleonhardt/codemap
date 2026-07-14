@@ -1,12 +1,51 @@
 package scanner
 
 import (
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
 	"sort"
 	"testing"
 )
+
+type cancelAfterErrChecks struct {
+	context.Context
+	remaining int
+}
+
+func (c *cancelAfterErrChecks) Err() error {
+	if c.remaining <= 0 {
+		return context.Canceled
+	}
+	c.remaining--
+	return nil
+}
+
+func TestBuildFileGraphFromAnalysesContextCancellation(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "main.go"), []byte("package main\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	analyses := make([]FileAnalysis, 100)
+	for i := range analyses {
+		analyses[i] = FileAnalysis{Path: "main.go", Imports: []string{"example.com/dependency"}}
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := BuildFileGraphFromAnalysesContext(ctx, root, analyses); !errors.Is(err, context.Canceled) {
+		t.Fatalf("pre-canceled graph build error = %v, want context.Canceled", err)
+	}
+
+	// Preliminary checks and the configured-file walk consume fewer than twelve
+	// Err calls, so this deterministic context cancels during indexing/resolution.
+	during := &cancelAfterErrChecks{Context: context.Background(), remaining: 12}
+	if _, err := BuildFileGraphFromAnalysesContext(during, root, analyses); !errors.Is(err, context.Canceled) {
+		t.Fatalf("mid-build graph error = %v, want context.Canceled", err)
+	}
+}
 
 func TestDetectLanguage(t *testing.T) {
 	tests := []struct {

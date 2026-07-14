@@ -33,9 +33,6 @@ var changedStatusRank = map[string]int{
 }
 
 func normalizeOptions(opts BuildOptions, fileCount int) BuildOptions {
-	if opts.BaseRef == "" {
-		opts.BaseRef = DefaultBaseRef
-	}
 	if opts.Since <= 0 {
 		opts.Since = DefaultSince
 	}
@@ -69,6 +66,9 @@ func Build(root string, opts BuildOptions) (*Artifact, error) {
 	}
 
 	fileCount := resolveRepoFileCount(absRoot)
+	if opts.BaseRef == "" {
+		opts.BaseRef = scanner.DefaultBaseRef(absRoot)
+	}
 	opts = normalizeOptions(opts, fileCount)
 
 	branch, err := gitCurrentBranch(absRoot)

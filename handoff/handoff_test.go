@@ -15,6 +15,9 @@ import (
 
 func runCmd(t *testing.T, dir, name string, args ...string) {
 	t.Helper()
+	if name == "git" {
+		args = append([]string{"-c", "commit.gpgsign=false"}, args...)
+	}
 	cmd := exec.Command(name, args...)
 	cmd.Dir = dir
 	if out, err := cmd.CombinedOutput(); err != nil {

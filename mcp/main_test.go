@@ -3,6 +3,8 @@ package codemapmcp
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -11,6 +13,8 @@ import (
 	"time"
 
 	"codemap/handoff"
+	"codemap/internal/buildinfo"
+	"codemap/internal/projectpath"
 	"codemap/scanner"
 	"codemap/watch"
 
@@ -112,13 +116,183 @@ func TestHandleFindFileAndStatus(t *testing.T) {
 		watchersMu.Unlock()
 	})
 
-	statusRes, _, err := handleStatus(context.Background(), nil, EmptyInput{})
+	statusRes, _, err := handleStatus(context.Background(), nil, StatusInput{})
 	if err != nil {
 		t.Fatalf("handleStatus error: %v", err)
 	}
 	statusOut := resultText(t, statusRes)
 	if !strings.Contains(statusOut, "codemap MCP server") || !strings.Contains(statusOut, "Active watchers: 1 active: /tmp/demo") {
 		t.Fatalf("unexpected status output:\n%s", statusOut)
+	}
+}
+
+func TestNewServerToolMetadataAndStatus(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	serverTransport, clientTransport := mcp.NewInMemoryTransports()
+	if _, err := NewServer(RuntimeOptions{}).Connect(ctx, serverTransport, nil); err != nil {
+		t.Fatal(err)
+	}
+	client := mcp.NewClient(&mcp.Implementation{Name: "metadata-test", Version: "1"}, nil)
+	session, err := client.Connect(ctx, clientTransport, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+
+	listed, err := session.ListTools(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(listed.Tools) != 16 {
+		t.Fatalf("tool count = %d, want 16", len(listed.Tools))
+	}
+	byName := make(map[string]*mcp.Tool, len(listed.Tools))
+	for _, tool := range listed.Tools {
+		byName[tool.Name] = tool
+		if tool.Name != "get_handoff" {
+			if tool.Annotations == nil || tool.Annotations.OpenWorldHint == nil || *tool.Annotations.OpenWorldHint {
+				t.Fatalf("tool %s missing closed-world annotation: %#v", tool.Name, tool.Annotations)
+			}
+		}
+	}
+	for _, name := range []string{"get_structure", "get_dependencies", "get_diff", "find_file", "get_importers", "status", "list_projects", "get_activity", "get_hubs", "get_file_context", "get_working_set", "list_skills", "get_skill"} {
+		if tool := byName[name]; tool == nil || tool.Annotations == nil || !tool.Annotations.ReadOnlyHint {
+			t.Fatalf("tool %s missing read-only annotation: %#v", name, tool)
+		}
+	}
+	for _, name := range []string{"start_watch", "stop_watch"} {
+		tool := byName[name]
+		if tool == nil || tool.Annotations == nil || tool.Annotations.DestructiveHint == nil || *tool.Annotations.DestructiveHint {
+			t.Fatalf("tool %s missing non-destructive annotation: %#v", name, tool)
+		}
+	}
+	if byName["get_handoff"].Annotations != nil {
+		t.Fatalf("get_handoff must remain unannotated: %#v", byName["get_handoff"].Annotations)
+	}
+	for _, name := range []string{"get_dependencies", "list_skills"} {
+		schema, err := json.Marshal(byName[name].InputSchema)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(schema), `"depth"`) {
+			t.Fatalf("%s schema exposes irrelevant depth: %s", name, schema)
+		}
+	}
+
+	status, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "status"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	statusOut := resultText(t, status)
+	if !strings.Contains(statusOut, "codemap MCP server "+buildinfo.Current()) {
+		t.Fatalf("status version is not exact: %s", statusOut)
+	}
+	for name := range byName {
+		if !strings.Contains(statusOut, name) {
+			t.Fatalf("status omitted registered tool %s:\n%s", name, statusOut)
+		}
+	}
+}
+
+func TestHandleStatusReportsSelectedRoots(t *testing.T) {
+	root := t.TempDir()
+	selection, err := projectpath.Select(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, _, err := handleStatus(context.Background(), nil, StatusInput{Path: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := resultText(t, result)
+	for _, want := range []string{
+		"Project root: " + selection.ProjectRoot,
+		"Setup root: " + selection.SetupRoot,
+		"Runtime root: " + selection.RuntimeRoot,
+		"Selection source: project",
+		"Config path: " + filepath.Join(selection.SetupRoot, ".codemap", "config.json"),
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("status missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestGetDependenciesUsesSingleAdvertisedRoot(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "main.go"), []byte("package main\n\nimport \"fmt\"\n\nfunc main() { fmt.Println() }\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	call := func(t *testing.T, roots []*mcp.Root, args map[string]any) *mcp.CallToolResult {
+		t.Helper()
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		serverTransport, clientTransport := mcp.NewInMemoryTransports()
+		if _, err := NewServer(RuntimeOptions{}).Connect(ctx, serverTransport, nil); err != nil {
+			t.Fatal(err)
+		}
+		client := mcp.NewClient(&mcp.Implementation{Name: "roots-test", Version: "1"}, nil)
+		client.AddRoots(roots...)
+		session, err := client.Connect(ctx, clientTransport, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer session.Close()
+		result, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "get_dependencies", Arguments: args})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return result
+	}
+
+	rootURI := (&url.URL{Scheme: "file", Path: root}).String()
+	result := call(t, []*mcp.Root{{URI: rootURI}}, nil)
+	if result.IsError {
+		t.Fatalf("single root should supply omitted path: %s", resultText(t, result))
+	}
+
+	multiple := call(t, []*mcp.Root{{URI: rootURI}, {URI: "file:///tmp/other"}}, nil)
+	if !multiple.IsError || !strings.Contains(resultText(t, multiple), "path is required: client advertised 2 roots") {
+		t.Fatalf("multiple roots should fail closed: %s", resultText(t, multiple))
+	}
+
+	for _, test := range []struct {
+		name  string
+		roots []*mcp.Root
+		want  string
+	}{
+		{name: "zero", want: "path is required: client advertised 0 roots"},
+		{name: "unsupported URI", roots: []*mcp.Root{{URI: "https://example.com/repo"}}, want: "path is required: the single client root is not an absolute local file URI"},
+		{name: "malformed URI", roots: []*mcp.Root{{URI: "file:///%zz"}}, want: "path is required: the single client root is not an absolute local file URI"},
+		{name: "relative URI", roots: []*mcp.Root{{URI: "file:relative/repo"}}, want: "path is required: the single client root is not an absolute local file URI"},
+		{name: "missing directory", roots: []*mcp.Root{{URI: "file:///definitely/not/a/codemap/root"}}, want: "path is required: the single client root is not an accessible directory"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got := call(t, test.roots, nil)
+			if !got.IsError || !strings.Contains(resultText(t, got), test.want) {
+				t.Fatalf("root resolution = %q, want error containing %q", resultText(t, got), test.want)
+			}
+		})
+	}
+
+	if _, invalid := resolveSingleClientRoot(nil); invalid == nil || !strings.Contains(resultText(t, invalid), "path is required: the single client root is missing") {
+		t.Fatalf("nil sole root should fail closed, got %#v", invalid)
+	}
+
+	explicit := call(t, []*mcp.Root{{URI: "https://example.com/not-local"}, {URI: "file:///tmp/other"}}, map[string]any{"path": root})
+	if explicit.IsError {
+		t.Fatalf("explicit path must win without consulting roots: %s", resultText(t, explicit))
+	}
+}
+
+func TestHandleGetDependenciesReturnsCallerCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	result, _, err := handleGetDependencies(ctx, nil, DependenciesInput{Path: t.TempDir()})
+	if result != nil || !errors.Is(err, context.Canceled) {
+		t.Fatalf("handleGetDependencies() = (%#v, %v), want context.Canceled transport error", result, err)
 	}
 }
 
@@ -195,7 +369,7 @@ func TestHandleListSkillsRejectsMalformedWorktreeSetup(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	res, _, err := handleListSkills(context.Background(), nil, PathInput{Path: root})
+	res, _, err := handleListSkills(context.Background(), nil, SkillsListInput{Path: root})
 	if err != nil {
 		t.Fatalf("handleListSkills() error: %v", err)
 	}
@@ -372,11 +546,11 @@ func TestHandleListSkillsResolvesWorktreeSetupPerInputPath(t *testing.T) {
 
 	linkedA := makeFixture("primary-a")
 	linkedB := makeFixture("primary-b")
-	resA, _, err := handleListSkills(context.Background(), nil, PathInput{Path: linkedA})
+	resA, _, err := handleListSkills(context.Background(), nil, SkillsListInput{Path: linkedA})
 	if err != nil {
 		t.Fatalf("handleListSkills(A) error: %v", err)
 	}
-	resB, _, err := handleListSkills(context.Background(), nil, PathInput{Path: linkedB})
+	resB, _, err := handleListSkills(context.Background(), nil, SkillsListInput{Path: linkedB})
 	if err != nil {
 		t.Fatalf("handleListSkills(B) error: %v", err)
 	}

@@ -5,10 +5,13 @@ import (
 	"os/exec"
 	"path/filepath"
 	"testing"
+
+	"codemap/scanner"
 )
 
 func runGitTestCmd(t *testing.T, dir string, args ...string) {
 	t.Helper()
+	args = append([]string{"-c", "commit.gpgsign=false"}, args...)
 	cmd := exec.Command("git", args...)
 	cmd.Dir = dir
 	if out, err := cmd.CombinedOutput(); err != nil {
@@ -39,7 +42,7 @@ func TestResolveHandoffBaseRef(t *testing.T) {
 
 	t.Run("prefers main branch when present", func(t *testing.T) {
 		root := makeRepoOnBranch(t, "main")
-		got := resolveHandoffBaseRef(root)
+		got := scanner.DefaultBaseRef(root)
 		if got != "main" {
 			t.Fatalf("expected base ref main, got %q", got)
 		}
@@ -47,7 +50,7 @@ func TestResolveHandoffBaseRef(t *testing.T) {
 
 	t.Run("falls back to master when main is absent", func(t *testing.T) {
 		root := makeRepoOnBranch(t, "master")
-		got := resolveHandoffBaseRef(root)
+		got := scanner.DefaultBaseRef(root)
 		if got != "master" {
 			t.Fatalf("expected base ref master, got %q", got)
 		}
@@ -55,7 +58,7 @@ func TestResolveHandoffBaseRef(t *testing.T) {
 
 	t.Run("falls back to HEAD when no known default branch exists", func(t *testing.T) {
 		root := makeRepoOnBranch(t, "feature/no-default")
-		got := resolveHandoffBaseRef(root)
+		got := scanner.DefaultBaseRef(root)
 		if got != "HEAD" {
 			t.Fatalf("expected base ref HEAD, got %q", got)
 		}

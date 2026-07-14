@@ -30,6 +30,7 @@ setup_test_project() {
 
     # Initialize git
     git init -q
+	git config commit.gpgsign false
     git config user.email "test@test.com"
     git config user.name "Test"
 

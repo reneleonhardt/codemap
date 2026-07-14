@@ -7,7 +7,9 @@ import (
 )
 
 const (
-	SchemaVersion  = 1
+	SchemaVersion = 1
+	// DefaultBaseRef is retained for source compatibility. New callers should
+	// leave BuildOptions.BaseRef empty to use scanner.DefaultBaseRef.
 	DefaultBaseRef = "main"
 	DefaultSince   = 6 * time.Hour
 )

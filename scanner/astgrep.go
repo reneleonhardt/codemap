@@ -206,6 +206,11 @@ func findNestedGitRepos(root string) []string {
 
 // ScanDirectory analyzes all files in a directory using sg scan
 func (s *AstGrepScanner) ScanDirectory(root string) ([]FileAnalysis, error) {
+	return s.ScanDirectoryContext(context.Background(), root)
+}
+
+// ScanDirectoryContext analyzes a directory while honoring caller cancellation.
+func (s *AstGrepScanner) ScanDirectoryContext(parent context.Context, root string) ([]FileAnalysis, error) {
 	if !s.Available() {
 		return nil, nil
 	}
@@ -234,12 +239,15 @@ func (s *AstGrepScanner) ScanDirectory(root string) ([]FileAnalysis, error) {
 	}
 	args = append(args, root)
 
-	ctx, cancel := context.WithTimeout(context.Background(), astGrepScanTimeout)
+	ctx, cancel := context.WithTimeout(parent, astGrepScanTimeout)
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, s.binary, args...)
 	out, err := cmd.Output()
 	if err != nil {
+		if parentErr := parent.Err(); parentErr != nil {
+			return nil, parentErr
+		}
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) || errors.Is(err, context.DeadlineExceeded) {
 			fmt.Fprintf(os.Stderr, "warning: ast-grep timed out after %s in %s; skipping ast-grep results\n", astGrepScanTimeout, root)
 			return nil, nil

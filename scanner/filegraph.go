@@ -2,6 +2,7 @@ package scanner
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -30,24 +31,41 @@ type fileIndex struct {
 // BuildFileGraph analyzes a project and returns file-level dependencies
 // Uses ast-grep for multi-language support with universal fuzzy resolution
 func BuildFileGraph(root string) (*FileGraph, error) {
+	return BuildFileGraphContext(context.Background(), root)
+}
+
+// BuildFileGraphContext builds a file graph while honoring cancellation.
+func BuildFileGraphContext(ctx context.Context, root string) (*FileGraph, error) {
 	// Use ast-grep to extract imports for all languages.
-	analyses, err := ScanForDeps(root)
+	analyses, err := ScanForDepsContext(ctx, root)
 	if err != nil {
 		return nil, err
 	}
-	return BuildFileGraphFromAnalyses(root, analyses)
+	return BuildFileGraphFromAnalysesContext(ctx, root, analyses)
 }
 
 // BuildFileGraphFromAnalyses builds the file graph from a pre-computed ast-grep
 // scan, letting callers that already hold the analyses avoid a redundant
 // full-repo ScanForDeps. BuildFileGraph is the convenience wrapper that scans.
 func BuildFileGraphFromAnalyses(root string, analyses []FileAnalysis) (*FileGraph, error) {
+	return BuildFileGraphFromAnalysesContext(context.Background(), root, analyses)
+}
+
+// BuildFileGraphFromAnalysesContext builds a file graph from existing analyses
+// while honoring cancellation during configured-file scanning and resolution.
+func BuildFileGraphFromAnalysesContext(ctx context.Context, root string, analyses []FileAnalysis) (*FileGraph, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	absRoot, err := filepath.Abs(root)
 	if err != nil {
 		return nil, err
 	}
 
-	analyses = filterConfiguredAnalyses(root, analyses)
+	analyses, err = filterConfiguredAnalysesContext(ctx, root, analyses)
+	if err != nil {
+		return nil, err
+	}
 
 	fg := &FileGraph{
 		Root:        absRoot,
@@ -62,23 +80,35 @@ func BuildFileGraphFromAnalyses(root string, analyses []FileAnalysis) (*FileGrap
 
 	// Detect path aliases from tsconfig.json (for TS/JS import resolution)
 	fg.PathAliases, fg.BaseURL = detectPathAliases(absRoot)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 
 	// Scan all files
 	gitCache := NewGitIgnoreCache(root)
-	files, err := ScanConfiguredFiles(root, gitCache)
+	files, err := ScanConfiguredFilesContext(ctx, root, gitCache)
 	if err != nil {
 		return nil, err
 	}
 
 	// Build file index for fast fuzzy matching
-	idx := buildFileIndex(files, fg.Module)
+	idx, err := buildFileIndexContext(ctx, files, fg.Module)
+	if err != nil {
+		return nil, err
+	}
 	fg.Packages = idx.goPkgs
 
 	// Resolve imports to files using universal fuzzy matching
 	for _, a := range analyses {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		var resolvedImports []string
 
 		for _, imp := range a.Imports {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
 			resolved := fuzzyResolve(imp, a.Path, idx, fg.Module, fg.PathAliases, fg.BaseURL)
 			// Exclude multi-file Go package imports to avoid inflating hub counts.
 			// Go package imports start with the module prefix and resolve to all
@@ -101,11 +131,19 @@ func BuildFileGraphFromAnalyses(root string, analyses []FileAnalysis) (*FileGrap
 		}
 	}
 
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	return fg, nil
 }
 
 // buildFileIndex creates a multi-key index for fast import resolution
 func buildFileIndex(files []FileInfo, goModule string) *fileIndex {
+	idx, _ := buildFileIndexContext(context.Background(), files, goModule)
+	return idx
+}
+
+func buildFileIndexContext(ctx context.Context, files []FileInfo, goModule string) (*fileIndex, error) {
 	idx := &fileIndex{
 		byExact:  make(map[string][]string),
 		bySuffix: make(map[string][]string),
@@ -114,6 +152,9 @@ func buildFileIndex(files []FileInfo, goModule string) *fileIndex {
 	}
 
 	for _, f := range files {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		path := f.Path
 		dir := filepath.Dir(path)
 		if dir == "." {
@@ -135,6 +176,9 @@ func buildFileIndex(files []FileInfo, goModule string) *fileIndex {
 		//   - "config.py"
 		parts := strings.Split(path, string(filepath.Separator))
 		for i := 1; i < len(parts); i++ {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
 			suffix := strings.Join(parts[i:], string(filepath.Separator))
 			idx.bySuffix[suffix] = append(idx.bySuffix[suffix], path)
 			// Also without extension
@@ -152,7 +196,10 @@ func buildFileIndex(files []FileInfo, goModule string) *fileIndex {
 		}
 	}
 
-	return idx
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return idx, nil
 }
 
 // fuzzyResolve converts an import path to actual file paths using universal matching

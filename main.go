@@ -199,8 +199,8 @@ func main() {
 	skylineMode := flag.Bool("skyline", false, "Enable skyline visualization mode")
 	animateMode := flag.Bool("animate", false, "Enable animation (use with --skyline)")
 	depsMode := flag.Bool("deps", false, "Enable dependency graph mode (function/import analysis)")
-	diffMode := flag.Bool("diff", false, "Only show files changed vs main (or use --ref to specify branch)")
-	diffRef := flag.String("ref", "main", "Branch/ref to compare against (use with --diff)")
+	diffMode := flag.Bool("diff", false, "Only show files changed vs the default branch (or use --ref)")
+	diffRef := flag.String("ref", "", "Branch/ref to compare against (use with --diff)")
 	depthLimit := flag.Int("depth", 0, "Limit tree depth (0 = unlimited)")
 	onlyExts := flag.String("only", "", "Only show files with these extensions (comma-separated, e.g., 'swift,go')")
 	excludePatterns := flag.String("exclude", "", "Exclude files matching patterns (comma-separated, e.g., '.xcassets,Fonts')")
@@ -227,8 +227,8 @@ func main() {
 		fmt.Println("  --skyline           City skyline visualization")
 		fmt.Println("  --animate           Animated skyline (use with --skyline)")
 		fmt.Println("  --deps              Dependency flow map (functions & imports)")
-		fmt.Println("  --diff              Only show files changed vs main")
-		fmt.Println("  --ref <branch>      Branch to compare against (default: main)")
+		fmt.Println("  --diff              Only show files changed vs the default branch")
+		fmt.Println("  --ref <branch>      Branch to compare against (default: auto-detected)")
 		fmt.Println("  --depth, -d <n>     Limit tree depth (0 = unlimited)")
 		fmt.Println("  --only <exts>       Only show files with these extensions (e.g., 'swift,go')")
 		fmt.Println("  --exclude <patterns> Exclude paths matching patterns (e.g., '.xcassets,Fonts')")
@@ -240,7 +240,7 @@ func main() {
 		fmt.Println("  codemap --skyline .             # Skyline visualization")
 		fmt.Println("  codemap --skyline --animate     # Animated skyline")
 		fmt.Println("  codemap --deps /path/to/proj    # Dependency flow map")
-		fmt.Println("  codemap --diff                  # Files changed vs main")
+		fmt.Println("  codemap --diff                  # Files changed vs the default branch")
 		fmt.Println("  codemap --diff --ref develop    # Files changed vs develop")
 		fmt.Println("  codemap --depth 3 .             # Show only 3 levels deep")
 		fmt.Println("  codemap --only swift .          # Just Swift files")
@@ -314,6 +314,9 @@ func main() {
 	if _, err := cmd.ValidateProjectPath(absRoot); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
+	}
+	if *diffMode && *diffRef == "" {
+		*diffRef = scanner.DefaultBaseRef(absRoot)
 	}
 
 	// Initialize gitignore cache (supports nested .gitignore files)
@@ -728,7 +731,7 @@ func runWatchSubcommand(subCmd, root string) {
 func runHandoffSubcommand(args []string) {
 	fs := flag.NewFlagSet("handoff", flag.ExitOnError)
 	since := fs.String("since", "6h", "Look back window for recent events (Go duration, e.g. 2h, 30m)")
-	baseRef := fs.String("ref", handoff.DefaultBaseRef, "Git base ref for diff (default: main)")
+	baseRef := fs.String("ref", "", "Git base ref for diff (default: auto-detected)")
 	jsonMode := fs.Bool("json", false, "Output raw handoff JSON")
 	latest := fs.Bool("latest", false, "Read the latest saved handoff instead of generating a new one")
 	prefixOnly := fs.Bool("prefix", false, "Render only the stable prefix layer")

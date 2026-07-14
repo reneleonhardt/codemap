@@ -1,6 +1,7 @@
 package scanner
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -256,6 +257,23 @@ func TestAstGrepScanDirectoryTimeout(t *testing.T) {
 	}
 	if results != nil {
 		t.Fatalf("expected nil results on timeout, got: %v", results)
+	}
+}
+
+func TestAstGrepScanDirectoryContextReturnsCallerCancellation(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("requires shell script execution")
+	}
+	root := t.TempDir()
+	fakeBinary := filepath.Join(root, "fake-sg.sh")
+	if err := os.WriteFile(fakeBinary, []byte("#!/bin/sh\nsleep 5\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	scanner := &AstGrepScanner{rulesDir: root, binary: fakeBinary}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := scanner.ScanDirectoryContext(ctx, root); !errors.Is(err, context.Canceled) {
+		t.Fatalf("ScanDirectoryContext() error = %v, want context.Canceled", err)
 	}
 }
 

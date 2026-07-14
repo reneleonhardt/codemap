@@ -105,7 +105,7 @@ Both values may be repository roots or subdirectories. An explicit
 `--setup-root` preserves the existing shared policy-and-runtime-state behavior,
 and managed MCP definitions created while it is active retain it automatically.
 
-## Available Tools (17)
+## Available Tools (16)
 
 ### Project Analysis
 
@@ -142,6 +142,12 @@ and managed MCP definitions created while it is active retain it automatically.
 | `get_handoff` | Build/read layered handoff artifact (`prefix` + `delta`) with lazy file detail loading |
 | `status` | Verify MCP connection and local filesystem access |
 | `list_projects` | Discover projects in a parent directory (with optional filter) |
+
+`get_dependencies` may omit `path` when the MCP client positively advertises
+roots list-change support and returns exactly one accessible local `file:`
+directory. Otherwise it fails closed and asks for an explicit path. With the Go
+SDK used here, an absent roots capability and `roots: {}` are indistinguishable,
+so `listChanged: true` is the required positive capability signal.
 
 ## Usage
 

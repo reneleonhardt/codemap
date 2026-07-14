@@ -277,6 +277,7 @@ func runCodemapWithInput(input string, args ...string) (string, string, error) {
 
 func runGitMainTestCmd(t *testing.T, dir string, args ...string) {
 	t.Helper()
+	args = append([]string{"-c", "commit.gpgsign=false"}, args...)
 	cmd := exec.Command("git", args...)
 	cmd.Dir = dir
 	if out, err := cmd.CombinedOutput(); err != nil {
@@ -848,6 +849,26 @@ func TestMainWatchCloneAndDiffModes(t *testing.T) {
 		}
 		if project.Files[0].Added == 0 && project.Files[0].Removed == 0 {
 			t.Fatalf("expected diff annotations on changed file, got %+v", project.Files[0])
+		}
+	})
+
+	t.Run("diff auto-detects non-main default branch", func(t *testing.T) {
+		if _, err := exec.LookPath("git"); err != nil {
+			t.Skip("git not available")
+		}
+
+		root := makeMainGitRepo(t, "master")
+		if err := os.WriteFile(filepath.Join(root, "main.go"), []byte("package main\n\nfunc changed() {}\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		stdout := runMainWithArgs(t, []string{"codemap", "--json", "--diff", root})
+		var project scanner.Project
+		if err := json.Unmarshal([]byte(stdout), &project); err != nil {
+			t.Fatalf("expected diff project JSON output, got error %v with body:\n%s", err, stdout)
+		}
+		if project.DiffRef != "master" {
+			t.Fatalf("project diff_ref = %q, want auto-detected master", project.DiffRef)
 		}
 	})
 }

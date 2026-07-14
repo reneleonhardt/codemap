@@ -1,6 +1,8 @@
 package scanner
 
 import (
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -8,6 +10,21 @@ import (
 	"strings"
 	"testing"
 )
+
+func TestReadExternalDepsContextReturnsCallerCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := ReadExternalDepsContext(ctx, t.TempDir()); !errors.Is(err, context.Canceled) {
+		t.Fatalf("ReadExternalDepsContext() error = %v, want context.Canceled", err)
+	}
+}
+
+func TestReadExternalDepsLegacyWrapperReturnsEmptyMapOnWalkError(t *testing.T) {
+	deps := ReadExternalDeps(filepath.Join(t.TempDir(), "missing"))
+	if deps == nil || len(deps) != 0 {
+		t.Fatalf("ReadExternalDeps() = %#v, want empty non-nil map", deps)
+	}
+}
 
 func TestParseGoMod(t *testing.T) {
 	gomod := `module example.com/myapp

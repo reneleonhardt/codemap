@@ -19,6 +19,7 @@ rm -rf "$TEST_PROJECT"
 mkdir -p "$TEST_PROJECT/src"
 cd "$TEST_PROJECT"
 git init -q
+git config commit.gpgsign false
 git config user.email "test@test.com"
 git config user.name "Test"
 

@@ -427,7 +427,9 @@ func hookSessionStart(root string) error {
 // showDiffVsMain shows files changed on this branch vs main.
 // For large/unknown repos, uses lightweight git output to avoid expensive scans.
 func showDiffVsMain(root string, fileCount int, fileCountKnown bool, projCfg config.ProjectConfig) {
-	// Check if we're on a branch other than main
+	baseRef := scanner.DefaultBaseRef(root)
+
+	// Check if we're on a branch other than the comparison branch.
 	branchCmd := exec.Command("git", "rev-parse", "--abbrev-ref", "HEAD")
 	branchCmd.Dir = root
 	branchOut, err := branchCmd.Output()
@@ -435,8 +437,8 @@ func showDiffVsMain(root string, fileCount int, fileCountKnown bool, projCfg con
 		return
 	}
 	branch := strings.TrimSpace(string(branchOut))
-	if branch == "main" || branch == "master" {
-		return // No diff to show on main branch
+	if branch == strings.TrimPrefix(baseRef, "origin/") {
+		return
 	}
 
 	// Run codemap --diff to show changes
@@ -446,18 +448,18 @@ func showDiffVsMain(root string, fileCount int, fileCountKnown bool, projCfg con
 	}
 
 	fmt.Println()
-	fmt.Printf("📝 Changes on branch '%s' vs main:\n", branch)
+	fmt.Printf("📝 Changes on branch '%s' vs %s:\n", branch, baseRef)
 
 	// Unknown file count typically means daemon state is not ready.
 	// Use cheap git-based output in that case to avoid startup blowups.
 	if shouldUseLightweightDiff(fileCount, fileCountKnown) {
-		showLightweightDiffVsMain(root)
+		showLightweightDiff(root, baseRef)
 		return
 	}
 
 	// Run codemap --diff to show richer impact analysis on manageable repos.
 	diffBudget := projCfg.DiffOutputBytes()
-	args := projectpath.PrependSetupRootArgs("--diff")
+	args := projectpath.PrependSetupRootArgs("--diff", "--ref", baseRef)
 	if len(projCfg.Only) > 0 {
 		args = append(args, "--only", strings.Join(projCfg.Only, ","))
 	}
@@ -508,8 +510,8 @@ func shouldUseLightweightDiff(fileCount int, fileCountKnown bool) bool {
 	return !fileCountKnown || fileCount > limits.LargeRepoFileCount
 }
 
-func showLightweightDiffVsMain(root string) {
-	cmd := exec.Command("git", "diff", "--name-only", "main...HEAD")
+func showLightweightDiff(root, baseRef string) {
+	cmd := exec.Command("git", "diff", "--name-only", baseRef+"...HEAD")
 	cmd.Dir = root
 	out, err := cmd.Output()
 	if err != nil {
@@ -1343,7 +1345,7 @@ func hookSessionStop(root string) error {
 }
 
 func writeSessionHandoff(root string, state *watch.State) error {
-	baseRef := resolveHandoffBaseRef(root)
+	baseRef := scanner.DefaultBaseRef(root)
 	artifact, err := handoff.Build(root, handoff.BuildOptions{
 		State:   state,
 		BaseRef: baseRef,
@@ -1405,49 +1407,6 @@ func sessionStartTime(state *watch.State) time.Time {
 		return state.RecentEvents[0].Time
 	}
 	return time.Now()
-}
-
-func resolveHandoffBaseRef(root string) string {
-	if remoteDefault, ok := gitSymbolicRef(root, "refs/remotes/origin/HEAD"); ok && remoteDefault != "" {
-		if gitRefExists(root, remoteDefault) {
-			return remoteDefault
-		}
-	}
-
-	for _, ref := range []string{"main", "master", "trunk", "develop"} {
-		if gitRefExists(root, ref) {
-			return ref
-		}
-	}
-
-	for _, ref := range []string{"origin/main", "origin/master", "origin/trunk", "origin/develop"} {
-		if gitRefExists(root, ref) {
-			return ref
-		}
-	}
-
-	// Last-resort fallback that always exists in committed repos.
-	return "HEAD"
-}
-
-func gitRefExists(root, ref string) bool {
-	cmd := exec.Command("git", "rev-parse", "--verify", "--quiet", ref)
-	cmd.Dir = root
-	return cmd.Run() == nil
-}
-
-func gitSymbolicRef(root, ref string) (string, bool) {
-	cmd := exec.Command("git", "symbolic-ref", "--quiet", "--short", ref)
-	cmd.Dir = root
-	out, err := cmd.Output()
-	if err != nil {
-		return "", false
-	}
-	value := strings.TrimSpace(string(out))
-	if value == "" {
-		return "", false
-	}
-	return value, true
 }
 
 func hookSessionIDFromStdin() string {

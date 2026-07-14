@@ -157,7 +157,7 @@ func TestMCPHandlersUseEachLinkedPrimaryConfig(t *testing.T) {
 
 	if scanner.NewAstGrepAnalyzer().Available() {
 		for _, fx := range fixtures {
-			deps, _, err := handleGetDependencies(context.Background(), nil, PathInput{Path: fx.linked})
+			deps, _, err := handleGetDependencies(context.Background(), nil, DependenciesInput{Path: fx.linked})
 			output := assertResult("dependencies", deps, err)
 			if strings.Contains(output, "0 files") {
 				t.Fatalf("dependencies omitted all configured-in files:\n%s", output)
