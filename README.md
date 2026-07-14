@@ -1,7 +1,20 @@
 # codemap 🗺️
 
+> This repository is a fork of [JordanCoin/codemap](https://github.com/JordanCoin/codemap), with additional agentic workflow features and fixes.
+
 > **codemap — a project brain for your AI.**
 > Give LLMs instant architectural context without burning tokens.
+
+## What This Fork Adds
+
+- **First-class Codex support** — setup, hooks, MCP, plugins, skills, and runtime-aware diagnostics.
+- **Shared setup across worktrees** — reuse the primary checkout's tuned `.codemap` configuration from linked or external worktrees.
+- **Project-aware MCP workflows** — automatic root routing and fewer fragile per-call root arguments.
+- **Resilient project discovery** — configuration-only projects remain usable without current daemon or index state.
+- **Accurate project state** — configured counts, filters, and status reflect the effective project setup.
+- **Reliable agent handoffs** — CLI and MCP handoffs preserve equivalent filtered context and metadata.
+- **Sandbox-safe, stable scanning** — dependency scans avoid global writes and watchers debounce duplicate events.
+- **Traceable integration builds** — cross-platform artifacts embed their exact version and commit; see the [latest integration workflow runs](https://github.com/reneleonhardt/codemap/actions/workflows/integration-artifacts.yml?query=branch%3Aagentic).
 
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
 ![Go](https://img.shields.io/badge/go-1.21+-00ADD8.svg)

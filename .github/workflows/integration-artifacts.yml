@@ -3,7 +3,7 @@ name: Integration artifacts
 on:
   push:
     branches:
-      - fork/integrate
+      - agentic
   workflow_dispatch:
 
 permissions:
