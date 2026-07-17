@@ -23,7 +23,7 @@ Write or improve `.codemap/config.json` so future Codemap calls stay focused on 
 
 1. Inspect the repo quickly before writing config
    - Read the root and applicable nested `AGENTS.md` files before deciding ownership or scope
-   - Read language workspace manifests such as `Cargo.toml`; preserve every declared workspace member and documented shared API layer
+   - Read language workspace manifests such as `Cargo.toml`; preserve every declared workspace member
    - Run `codemap .`
    - If needed, run `codemap --deps .`
    - Note the stack markers (`Cargo.toml`, `Package.swift`, `*.xcodeproj`, `go.mod`, `package.json`, `pyproject.toml`, etc.)

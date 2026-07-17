@@ -107,7 +107,7 @@ func TestLoadBuiltinSkills(t *testing.T) {
 	}
 }
 
-func TestConfigSetupSkillPreservesRepositoryOwnedWorkspaceRoots(t *testing.T) {
+func TestConfigSetupSkillIncludesCargoWorkspaceCoverageGuidance(t *testing.T) {
 	skills, err := loadBuiltinSkills()
 	if err != nil {
 		t.Fatal(err)
@@ -119,10 +119,22 @@ func TestConfigSetupSkillPreservesRepositoryOwnedWorkspaceRoots(t *testing.T) {
 			break
 		}
 	}
-	for _, required := range []string{"AGENTS.md", "Cargo.toml", "workspace members", "shared API"} {
-		if !strings.Contains(body, required) {
-			t.Fatalf("config-setup skill omits %q", required)
-		}
+	// Builtin skills are embedded runtime guidance. Keep these behavior
+	// requirements explicit without coupling the test to the document layout.
+	for _, check := range []struct {
+		name     string
+		guidance string
+	}{
+		{name: "reads agent instructions", guidance: "AGENTS.md"},
+		{name: "reads Cargo workspace manifests", guidance: "Cargo.toml"},
+		{name: "keeps workspace members", guidance: "workspace members"},
+		{name: "checks cross-layer dependencies", guidance: "cross-layer dependency"},
+	} {
+		t.Run(check.name, func(t *testing.T) {
+			if !strings.Contains(body, check.guidance) {
+				t.Fatalf("config-setup skill omits %q", check.guidance)
+			}
+		})
 	}
 }
 
