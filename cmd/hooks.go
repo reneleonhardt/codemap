@@ -30,6 +30,7 @@ type hubInfo struct {
 	Hubs      []string
 	Importers map[string][]string
 	Imports   map[string][]string
+	Coverage  scanner.GraphCoverage
 }
 
 const (
@@ -116,13 +117,14 @@ func getHubInfoWithFallback(root string, allowFallback bool) *hubInfo {
 	if state := watch.ReadState(root); state != nil {
 		// State may contain file/event info only (no dependency graph) on very
 		// large repos. Avoid expensive fallback scans in that case.
-		if len(state.Importers) == 0 && len(state.Imports) == 0 && len(state.Hubs) == 0 {
+		if len(state.Importers) == 0 && len(state.Imports) == 0 && len(state.Hubs) == 0 && state.Coverage.Status == "" {
 			return nil
 		}
 		return &hubInfo{
 			Hubs:      state.Hubs,
 			Importers: state.Importers,
 			Imports:   state.Imports,
+			Coverage:  state.Coverage,
 		}
 	}
 
@@ -145,6 +147,7 @@ func getHubInfoWithFallback(root string, allowFallback bool) *hubInfo {
 		Hubs:      fg.HubFiles(),
 		Importers: fg.Importers,
 		Imports:   fg.Imports,
+		Coverage:  fg.Coverage,
 	}
 }
 

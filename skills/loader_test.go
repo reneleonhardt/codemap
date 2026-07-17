@@ -3,6 +3,7 @@ package skills
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"codemap/internal/projectpath"
@@ -102,6 +103,25 @@ func TestLoadBuiltinSkills(t *testing.T) {
 		}
 		if s.Source != "builtin" {
 			t.Errorf("expected source 'builtin', got %q", s.Source)
+		}
+	}
+}
+
+func TestConfigSetupSkillPreservesRepositoryOwnedWorkspaceRoots(t *testing.T) {
+	skills, err := loadBuiltinSkills()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var body string
+	for _, skill := range skills {
+		if skill.Meta.Name == "config-setup" {
+			body = skill.Body
+			break
+		}
+	}
+	for _, required := range []string{"AGENTS.md", "Cargo.toml", "workspace members", "shared API"} {
+		if !strings.Contains(body, required) {
+			t.Fatalf("config-setup skill omits %q", required)
 		}
 	}
 }
