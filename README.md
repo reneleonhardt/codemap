@@ -1,9 +1,9 @@
 # codemap 🗺️
 
-> This repository is a fork of [JordanCoin/codemap](https://github.com/JordanCoin/codemap), with additional agentic workflow features and fixes.
-
 > **codemap — a project brain for your AI.**
 > Give LLMs instant architectural context without burning tokens.
+
+This repository is a fork of [JordanCoin/codemap](https://github.com/JordanCoin/codemap), with additional agentic workflow features and fixes.
 
 ## What This Fork Adds
 
@@ -14,7 +14,90 @@
 - **Accurate project state** — configured counts, filters, and status reflect the effective project setup.
 - **Reliable agent handoffs** — CLI and MCP handoffs preserve equivalent filtered context and metadata.
 - **Sandbox-safe, stable scanning** — dependency scans avoid global writes and watchers debounce duplicate events.
-- **Traceable integration builds** — cross-platform artifacts embed their exact version and commit; see the [latest integration workflow runs](https://github.com/reneleonhardt/codemap/actions/workflows/integration-artifacts.yml?query=branch%3Aagentic).
+- **Traceable integration builds** — cross-platform artifacts embed their exact version and commit.
+
+## Agentic Examples
+
+**1. Point an agent at a linked worktree**
+
+```sh
+git worktree add /tmp/project.worktree -b feature main
+codemap -C /tmp/project.worktree context --compact
+```
+
+**Key detail:** `-C` selects the agent's code checkout. Standard linked worktrees
+automatically reuse the primary checkout's config and skills, so do not add
+`--setup-root`; handoff, watcher, and session state stays worktree-local.
+
+**2. Reuse tuned setup from an independent clone**
+
+```sh
+codemap -C /tmp/project.worktree --setup-root /path/to/configured/repo context --compact
+```
+
+**Key detail:** `-C` selects the code to analyze; `--setup-root` selects the
+`.codemap` setup to reuse. Both accept a repository root or a descendant.
+
+**3. Set up and diagnose Codex directly**
+
+```sh
+codemap setup --agent codex
+codemap doctor --agent codex
+```
+
+**Key detail:** managed integrations record the verified absolute `codemap` path.
+Rerun setup after moving the binary.
+
+**4. Generate a read-only machine handoff**
+
+```sh
+codemap handoff --json --no-save .
+```
+
+**Key detail:** CLI handoffs save by default; `--no-save` avoids worktree writes.
+MCP `get_handoff` is read-only unless called with `save=true`.
+
+**5. Diff against the repository's real default branch**
+
+```sh
+codemap -C /tmp/project.worktree --diff
+```
+
+**Key detail:** the base ref is auto-detected instead of assuming `main`. Add
+`--ref <branch>` only when you need an explicit override.
+
+**6. Make dependency requests root-safe**
+
+```sh
+codemap --deps /path/to/configured/repo
+```
+
+For an agent, a portable MCP prompt is:
+
+```text
+Use Codemap get_dependencies with path="/path/to/configured/repo".
+```
+
+**Key detail:** MCP may omit `path` only when the client advertises exactly one
+accessible local root; otherwise pass it explicitly.
+
+**7. Use configured projects before index state exists**
+
+```sh
+codemap -C /path/to/configured/repo context --compact
+```
+
+**Key detail:** `.codemap/config.json` filters remain effective even without current
+daemon or index state.
+
+**8. Identify the exact integration build**
+
+```sh
+codemap --version  # codemap v4.1.10-8+858eea2
+```
+
+**Key detail:** integration artifacts report both their release version and source revision,
+making deployed agent environments traceable.
 
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
 ![Go](https://img.shields.io/badge/go-1.21+-00ADD8.svg)
@@ -23,18 +106,19 @@
 
 ![codemap screenshot](assets/codemap.png)
 
-## Install
+## Install Fork
 
-```bash
-# macOS/Linux
-brew tap JordanCoin/tap && brew install codemap
+**[Download the latest successful integration artifacts →](https://github.com/reneleonhardt/codemap/actions/workflows/integration-artifacts.yml?query=branch%3Aagentic+is%3Asuccess)**
 
-# Windows
-scoop bucket add codemap https://github.com/JordanCoin/scoop-codemap
-scoop install codemap
+GitHub wraps the build files in an outer ZIP. On macOS, extract the basic archive and remove Gatekeeper's quarantine attribute before running it:
+
+```sh
+arch=$(uname -m); [ "$arch" = x86_64 ] && arch=amd64
+unzip codemap-integration-*.zip
+tar -xzf codemap_*_darwin_"$arch".tar.gz
+xattr -dr com.apple.quarantine codemap
+./codemap --version
 ```
-
-> Other options: [Releases](https://github.com/JordanCoin/codemap/releases) | `go install` | Build from source
 
 ## Tarball / CI Install
 
@@ -165,7 +249,7 @@ metadata linking them, so sharing setup between them still requires an explicit
 override:
 
 ```bash
-codemap -C /tmp/independent-clone --setup-root /path/to/original context
+codemap -C /tmp/independent-clone --setup-root /path/to/configured/repo context
 ```
 
 `-C`/`--project-root` selects the repository Codemap operates on.
