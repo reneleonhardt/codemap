@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"codemap/config"
 	"codemap/internal/projectpath"
 	"codemap/limits"
 	"codemap/scanner"
@@ -148,8 +149,12 @@ func (d *Daemon) shouldSkipEvent(debouncer *eventDebouncer, event fsnotify.Event
 
 	d.graph.mu.RLock()
 	cached := d.graph.State[relPath]
+	_, configured := d.graph.ConfiguredFiles[relPath]
 	matches := cached != nil && cached.Size == info.Size()
 	d.graph.mu.RUnlock()
+	if configured {
+		return false
+	}
 	return matches
 }
 
@@ -213,6 +218,7 @@ func (d *Daemon) handleEvent(fsEvent fsnotify.Event) {
 
 	// Update graph and calculate deltas
 	d.graph.mu.Lock()
+	_, wasConfigured := d.graph.ConfiguredFiles[relPath]
 	switch op {
 	case "CREATE", "WRITE":
 		info, err := os.Stat(fsEvent.Name)
@@ -223,6 +229,10 @@ func (d *Daemon) handleEvent(fsEvent fsnotify.Event) {
 				delete(d.graph.Files, relPath)
 				delete(d.graph.ConfiguredFiles, relPath)
 				delete(d.graph.State, relPath)
+				if wasConfigured {
+					state := newGraphState(d.root, config.Load(d.root), graphLifecycleStale, time.Time{}, nil)
+					d.markGraphLifecycleLocked(state)
+				}
 			}
 			d.graph.mu.Unlock()
 			return
@@ -291,6 +301,11 @@ func (d *Daemon) handleEvent(fsEvent fsnotify.Event) {
 		delete(d.graph.Files, relPath)
 		delete(d.graph.ConfiguredFiles, relPath)
 		delete(d.graph.State, relPath)
+	}
+	_, isConfigured := d.graph.ConfiguredFiles[relPath]
+	if wasConfigured || isConfigured {
+		state := newGraphState(d.root, config.Load(d.root), graphLifecycleStale, time.Time{}, nil)
+		d.markGraphLifecycleLocked(state)
 	}
 
 	// Check if file is dirty (uncommitted) - only if git repo
@@ -454,7 +469,11 @@ func (d *Daemon) writeState() {
 		RecentEvents:        eventsCopy,
 		WorkingSet:          d.graph.WorkingSet.Snapshot(50),
 	}
-	if d.graph.FileGraph != nil {
+	if d.graph.GraphState.Status != "" {
+		graphState := d.graph.GraphState
+		state.Graph = &graphState
+	}
+	if d.graph.GraphState.Status == graphLifecycleAvailable && d.graph.FileGraph != nil {
 		state.Hubs = d.graph.FileGraph.HubFiles()
 		state.Importers = d.graph.FileGraph.Importers
 		state.Imports = d.graph.FileGraph.Imports

@@ -87,8 +87,11 @@ func (d *Daemon) Start() error {
 	fileCount := d.ConfiguredFileCount()
 	if shouldComputeDependencyGraph(fileCount) {
 		d.computeDeps()
-	} else if d.verbose {
-		fmt.Printf("[watch] Skipping dependency graph for large repo (%d files)\n", fileCount)
+	} else {
+		d.markGraphLifecycle(graphLifecycleSkippedSize)
+		if d.verbose {
+			fmt.Printf("[watch] Skipping dependency graph for large repo (%d files)\n", fileCount)
+		}
 	}
 
 	// Add directories to watcher
@@ -202,19 +205,51 @@ func (d *Daemon) isConfiguredFile(path string) bool {
 
 // computeDeps builds the file-to-file dependency graph
 func (d *Daemon) computeDeps() {
+	d.computeDepsWith(scanner.BuildFileGraph)
+}
+
+func (d *Daemon) computeDepsWith(build func(string) (*scanner.FileGraph, error)) {
+	d.computeDepsWithBeforePublish(build, nil)
+}
+
+func (d *Daemon) computeDepsWithBeforePublish(build func(string) (*scanner.FileGraph, error), beforePublish func()) {
 	start := time.Now()
+	buildConfig := config.Load(d.root)
+	d.graph.mu.RLock()
+	configuredBefore := make([]string, 0, len(d.graph.ConfiguredFiles))
+	for file := range d.graph.ConfiguredFiles {
+		configuredBefore = append(configuredBefore, file)
+	}
+	generationBefore := d.graph.graphGeneration
+	d.graph.mu.RUnlock()
 
 	// Build file graph (internal file-to-file dependencies)
-	fg, err := scanner.BuildFileGraph(d.root)
-	if err != nil {
+	fg, err := build(d.root)
+	if err != nil || fg == nil || (len(configuredBefore) > 0 && len(fg.Imports) == 0 && len(fg.Importers) == 0) {
+		d.markGraphLifecycle(graphLifecycleFailed)
 		if d.verbose {
 			fmt.Printf("[watch] File graph unavailable: %v\n", err)
 		}
 		return
 	}
+	if beforePublish != nil {
+		beforePublish()
+	}
 
 	d.graph.mu.Lock()
 	defer d.graph.mu.Unlock()
+	configuredAfter := make([]string, 0, len(d.graph.ConfiguredFiles))
+	for file := range d.graph.ConfiguredFiles {
+		configuredAfter = append(configuredAfter, file)
+	}
+	currentConfig := config.Load(d.root)
+	if d.graph.graphGeneration != generationBefore ||
+		ConfiguredInventoryFingerprint(configuredBefore) != ConfiguredInventoryFingerprint(configuredAfter) ||
+		graphFilterFingerprint(buildConfig) != graphFilterFingerprint(currentConfig) {
+		d.markGraphLifecycleLocked(newGraphState(d.root, currentConfig, graphLifecycleStale, time.Time{}, nil))
+		return
+	}
+	state := newGraphState(d.root, buildConfig, graphLifecycleAvailable, time.Now(), configuredBefore)
 
 	// Convert FileGraph to DepContext map
 	d.graph.DepCtx = make(map[string]*DepContext)
@@ -229,11 +264,27 @@ func (d *Daemon) computeDeps() {
 	}
 
 	d.graph.HasDeps = true
+	d.graph.GraphState = state
 
 	hubCount := len(fg.HubFiles())
 	if d.verbose {
 		fmt.Printf("[watch] File graph: %d files, %d hubs in %v\n", len(d.graph.Files), hubCount, time.Since(start))
 	}
+}
+
+func (d *Daemon) markGraphLifecycle(status GraphLifecycle) {
+	state := newGraphState(d.root, config.Load(d.root), status, time.Time{}, nil)
+	d.graph.mu.Lock()
+	defer d.graph.mu.Unlock()
+	d.markGraphLifecycleLocked(state)
+}
+
+func (d *Daemon) markGraphLifecycleLocked(state GraphState) {
+	d.graph.graphGeneration++
+	d.graph.GraphState = state
+	d.graph.HasDeps = false
+	d.graph.FileGraph = nil
+	d.graph.DepCtx = make(map[string]*DepContext)
 }
 
 // addWatchDirs recursively adds directories to the watcher

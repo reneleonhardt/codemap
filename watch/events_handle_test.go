@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"codemap/config"
 	"codemap/scanner"
 
 	"github.com/fsnotify/fsnotify"
@@ -27,6 +28,9 @@ func TestHandleEventMissingWriteClearsStaleTrackedFile(t *testing.T) {
 			State: map[string]*FileState{
 				rel: {Lines: 3, Size: 32},
 			},
+			ConfiguredFiles: map[string]struct{}{rel: {}},
+			GraphState:      newGraphState(root, config.ProjectConfig{}, graphLifecycleAvailable, time.Now(), []string{rel}),
+			HasDeps:         true,
 		},
 	}
 
@@ -40,6 +44,9 @@ func TestHandleEventMissingWriteClearsStaleTrackedFile(t *testing.T) {
 	}
 	if _, exists := d.graph.State[rel]; exists {
 		t.Fatalf("expected stale file %q to be removed from graph.State", rel)
+	}
+	if d.graph.GraphState.Status != graphLifecycleStale || d.graph.HasDeps {
+		t.Fatalf("missing write left graph usable: %#v, has deps %t", d.graph.GraphState, d.graph.HasDeps)
 	}
 }
 
@@ -215,15 +222,11 @@ func TestHandleEventWriteUpdatesTrackedStateAndContext(t *testing.T) {
 	if last.Delta != 2 {
 		t.Fatalf("event delta = %d, want 2", last.Delta)
 	}
-	if last.Importers != 3 || last.Imports != 1 {
-		t.Fatalf("dependency context = imports:%d importers:%d", last.Imports, last.Importers)
+	if last.Importers != 0 || last.Imports != 0 || last.IsHub || len(last.RelatedHot) != 0 {
+		t.Fatalf("event retained stale dependency context: %#v", last)
 	}
-	if !last.IsHub {
-		t.Fatal("expected event to be marked as hub")
-	}
-	sort.Strings(last.RelatedHot)
-	if len(last.RelatedHot) != 1 || last.RelatedHot[0] != "dep.go" {
-		t.Fatalf("related hot files = %v, want [dep.go]", last.RelatedHot)
+	if d.graph.GraphState.Status != graphLifecycleStale || d.graph.HasDeps {
+		t.Fatalf("graph state = %#v, has deps %t", d.graph.GraphState, d.graph.HasDeps)
 	}
 }
 

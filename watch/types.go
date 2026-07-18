@@ -50,6 +50,8 @@ type Graph struct {
 	LastScan        time.Time
 	IsGitRepo       bool
 	HasDeps         bool // whether deps were successfully computed
+	GraphState      GraphState
+	graphGeneration uint64
 }
 
 // State represents the daemon state that hooks can read
@@ -63,6 +65,7 @@ type State struct {
 	RecentEvents        []Event               `json:"recent_events"` // last 50 events for timeline
 	WorkingSet          *WorkingSet           `json:"working_set,omitempty"`
 	Coverage            scanner.GraphCoverage `json:"coverage,omitempty"`
+	Graph               *GraphState           `json:"graph,omitempty"`
 }
 
 // ConfiguredCount returns the persisted count for the active project filters.

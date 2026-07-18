@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"codemap/config"
+
 	"github.com/fsnotify/fsnotify"
 )
 
@@ -40,6 +42,36 @@ func TestDaemonDoesNotDebounceWriteWhenCachedSizeIsStale(t *testing.T) {
 	d.graph.State["main.go"].Size = info.Size()
 	if !d.shouldSkipEvent(debouncer, event, base.Add(20*time.Millisecond)) {
 		t.Fatal("duplicate write should be skipped once cached state is current")
+	}
+}
+
+func TestDaemonNeverDebouncesConfiguredWrite(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "main.go")
+	content := []byte("package main\n")
+	if err := os.WriteFile(path, content, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, status := range []GraphLifecycle{graphLifecycleAvailable, graphLifecycleStale} {
+		t.Run(string(status), func(t *testing.T) {
+			d := &Daemon{
+				root: root,
+				graph: &Graph{
+					State:           map[string]*FileState{"main.go": {Size: int64(len(content))}},
+					ConfiguredFiles: map[string]struct{}{"main.go": {}},
+					GraphState:      newGraphState(root, config.ProjectConfig{}, status, time.Now(), []string{"main.go"}),
+				},
+			}
+			debouncer := newEventDebouncer(100 * time.Millisecond)
+			event := fsnotify.Event{Name: path, Op: fsnotify.Write}
+			base := time.Unix(0, 0)
+			if d.shouldSkipEvent(debouncer, event, base) {
+				t.Fatal("first configured write should not be skipped")
+			}
+			if d.shouldSkipEvent(debouncer, event, base.Add(10*time.Millisecond)) {
+				t.Fatalf("configured write must reach invalidation while graph is %s", status)
+			}
+		})
 	}
 }
 

@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"codemap/config"
 	"codemap/scanner"
 	"codemap/watch"
 )
@@ -218,8 +219,8 @@ func TestHookPromptSubmitDoesNotClaimRiskFromCachedGraph(t *testing.T) {
 		if !strings.Contains(out, `"risk":"unknown"`) {
 			t.Fatalf("missing unknown-risk marker:\n%s", out)
 		}
-		if !strings.Contains(out, "pkg/types.go is a HUB") {
-			t.Fatalf("cached display context should remain available:\n%s", out)
+		if strings.Contains(out, "pkg/types.go is a HUB") {
+			t.Fatalf("unvalidated cached hub claim leaked into display:\n%s", out)
 		}
 	})
 
@@ -313,6 +314,141 @@ func TestContextWorkingSetRequiresFreshGraphEvidence(t *testing.T) {
 			t.Fatalf("working files retained cached hub label: %#v", envelope.WorkingSet.TopFiles)
 		}
 	})
+}
+
+func TestContextValidatedGraphCache(t *testing.T) {
+	root := t.TempDir()
+	cfg := config.ProjectConfig{Only: []string{"go"}, Exclude: []string{"vendor"}}
+	writeProjectConfig(t, root, cfg)
+	state := &watch.State{
+		UpdatedAt: time.Now(),
+		Imports: map[string][]string{
+			"a.go": {"pkg/hub.go"}, "b.go": {"pkg/hub.go"}, "c.go": {"pkg/hub.go"},
+		},
+		Importers: map[string][]string{
+			"pkg/hub.go": {"a.go", "b.go", "c.go"},
+		},
+	}
+	configuredCount := 4
+	state.ConfiguredFileCount = &configuredCount
+	files := []scanner.FileInfo{{Path: "pkg/hub.go"}, {Path: "a.go"}, {Path: "b.go"}, {Path: "c.go"}}
+	graphState := watch.NewGraphState(root, cfg, watch.GraphLifecycleAvailable, time.Now(), contextFilePaths(files))
+	state.Graph = &graphState
+
+	t.Run("valid cache skips fresh graph", func(t *testing.T) {
+		deps := testContextEnvelopeDeps(files, nil)
+		deps.readState = func(string) *watch.State { return state }
+		calls := 0
+		deps.buildFileGraph = func(context.Context, string) (*scanner.FileGraph, error) {
+			calls++
+			return nil, errors.New("fresh graph must not run")
+		}
+		envelope := buildContextEnvelopeWithDeps(context.Background(), root, "refactor pkg/hub.go", true, deps)
+		if calls != 0 || envelope.Project.GraphEvidence.Source != graphEvidenceWatchCache {
+			t.Fatalf("calls = %d, evidence = %#v", calls, envelope.Project.GraphEvidence)
+		}
+		if envelope.Project.HubCount == nil || *envelope.Project.HubCount != 1 || envelope.Intent.RiskLevel != "medium" {
+			t.Fatalf("envelope = %#v", envelope)
+		}
+	})
+
+	t.Run("invalid cache falls back to fresh graph", func(t *testing.T) {
+		invalid := *state
+		invalidGraph := *state.Graph
+		invalidGraph.BuilderRevision = "old"
+		invalid.Graph = &invalidGraph
+		fresh := &scanner.FileGraph{Imports: map[string][]string{"a.go": {"pkg/hub.go"}}, Importers: map[string][]string{"pkg/hub.go": {"a.go"}}}
+		deps := testContextEnvelopeDeps(files, fresh)
+		deps.readState = func(string) *watch.State { return &invalid }
+		calls := 0
+		original := deps.buildFileGraph
+		deps.buildFileGraph = func(ctx context.Context, root string) (*scanner.FileGraph, error) {
+			calls++
+			return original(ctx, root)
+		}
+		envelope := buildContextEnvelopeWithDeps(context.Background(), root, "refactor pkg/hub.go", true, deps)
+		if calls != 1 || envelope.Project.GraphEvidence.Source != graphEvidenceFreshScan {
+			t.Fatalf("calls = %d, evidence = %#v", calls, envelope.Project.GraphEvidence)
+		}
+	})
+
+	for _, tt := range []struct {
+		name  string
+		files []scanner.FileInfo
+	}{
+		{name: "changed count", files: append(append([]scanner.FileInfo(nil), files...), scanner.FileInfo{Path: "d.go"})},
+		{name: "same count replacement", files: []scanner.FileInfo{{Path: "pkg/replacement.go"}, {Path: "a.go"}, {Path: "b.go"}, {Path: "c.go"}}},
+	} {
+		t.Run(tt.name+" falls back to fresh graph", func(t *testing.T) {
+			fresh := &scanner.FileGraph{Imports: map[string][]string{"a.go": {tt.files[0].Path}}, Importers: map[string][]string{tt.files[0].Path: {"a.go"}}}
+			deps := testContextEnvelopeDeps(tt.files, fresh)
+			deps.readState = func(string) *watch.State { return state }
+			calls := 0
+			original := deps.buildFileGraph
+			deps.buildFileGraph = func(ctx context.Context, root string) (*scanner.FileGraph, error) {
+				calls++
+				return original(ctx, root)
+			}
+			envelope := buildContextEnvelopeWithDeps(context.Background(), root, "inspect "+tt.files[0].Path, true, deps)
+			if calls != 1 || envelope.Project.GraphEvidence.Source != graphEvidenceFreshScan {
+				t.Fatalf("calls = %d, evidence = %#v", calls, envelope.Project.GraphEvidence)
+			}
+		})
+	}
+
+	t.Run("large invalid cache stays unavailable", func(t *testing.T) {
+		invalid := *state
+		invalidGraph := *state.Graph
+		invalidGraph.ProjectRoot = t.TempDir()
+		invalid.Graph = &invalidGraph
+		large := make([]scanner.FileInfo, 5001)
+		deps := testContextEnvelopeDeps(large, nil)
+		deps.readState = func(string) *watch.State { return &invalid }
+		calls := 0
+		deps.buildFileGraph = func(context.Context, string) (*scanner.FileGraph, error) { calls++; return nil, nil }
+		envelope := buildContextEnvelopeWithDeps(context.Background(), root, "inspect", true, deps)
+		if calls != 0 || envelope.Project.GraphEvidence.Reason != graphEvidenceLargeRepository {
+			t.Fatalf("calls = %d, evidence = %#v", calls, envelope.Project.GraphEvidence)
+		}
+	})
+}
+
+func TestPromptHookValidatedGraphCache(t *testing.T) {
+	root := t.TempDir()
+	cfg := config.ProjectConfig{Only: []string{"go"}}
+	writeProjectConfig(t, root, cfg)
+	mustWriteFile(t, filepath.Join(root, "pkg", "types.go"), "package pkg\n")
+	mustWriteFile(t, filepath.Join(root, "generated", ".gitignore"), "*.go\n")
+	mustWriteFile(t, filepath.Join(root, "generated", "deeper", "ignored.go"), "package generated\n")
+	graphState := watch.NewGraphState(root, cfg, watch.GraphLifecycleAvailable, time.Now(), []string{"pkg/types.go"})
+	state := watch.State{
+		UpdatedAt: time.Now(),
+		Graph:     &graphState,
+		Importers: map[string][]string{"pkg/types.go": {"a.go", "b.go", "c.go"}},
+		Imports:   map[string][]string{"a.go": {"pkg/types.go"}},
+	}
+	configuredCount := 1
+	state.ConfiguredFileCount = &configuredCount
+
+	checkRisk := func(prompt, want string) {
+		writeWatchState(t, root, state)
+		withStdinInput(t, mustJSONInput(t, map[string]string{"prompt": prompt}), func() {
+			out := captureOutput(func() {
+				if err := hookPromptSubmit(root); err != nil {
+					t.Fatal(err)
+				}
+			})
+			if !strings.Contains(out, `"risk":"`+want+`"`) {
+				t.Fatalf("missing %s risk:\n%s", want, out)
+			}
+		})
+	}
+
+	checkRisk("refactor pkg/types.go", "medium")
+	checkRisk("refactor pkg/missing.go", "unknown")
+	checkRisk("refactor generated/deeper/ignored.go", "unknown")
+	state.Graph.BuilderRevision = "old"
+	checkRisk("refactor pkg/types.go", "unknown")
 }
 
 func testContextEnvelopeDeps(files []scanner.FileInfo, graph *scanner.FileGraph) contextEnvelopeDeps {
