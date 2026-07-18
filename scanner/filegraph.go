@@ -84,7 +84,7 @@ func BuildFileGraphFromAnalysesContext(ctx context.Context, root string, analyse
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	rustWorkspace := buildRustWorkspaceIndex(absRoot)
+	rustWorkspace := buildRustWorkspaceIndex(absRoot, analyses)
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
