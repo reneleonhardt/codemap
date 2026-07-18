@@ -11,7 +11,14 @@ import (
 
 const (
 	rustCoverageStatus = "partial"
-	rustCoverageNote   = "Rust macro-generated, string-routed, renamed-dependency, and #[path] module edges may be unresolved"
+	rustCoverageNote   = "Rust macro-generated, cfg-gated dev-dependency, string-routed, and #[path] module edges may be unresolved"
+
+	rustTargetLib         = "lib"
+	rustTargetBin         = "bin"
+	rustTargetExample     = "example"
+	rustTargetTest        = "test"
+	rustTargetBench       = "bench"
+	rustTargetCustomBuild = "custom-build"
 )
 
 // GraphCoverage describes known dependency-graph blind spots.
@@ -23,31 +30,34 @@ type GraphCoverage struct {
 type rustTarget struct {
 	rootFile  string
 	sourceDir string
+	kind      string
+}
+
+type rustLocalDependency struct {
+	packageRoot string
+	alias       string
+	kind        string
 }
 
 type rustPackage struct {
-	crateID string
-	root    string
-	lib     *rustTarget
-	targets []rustTarget
+	crateID       string
+	root          string
+	lib           *rustTarget
+	targets       []rustTarget
+	dependencies  []rustLocalDependency
+	authoritative bool
 }
 
 type rustWorkspaceIndex struct {
 	byCrateID   map[string][]rustPackage
+	byRoot      map[string]rustPackage
 	packages    []rustPackage
 	moduleDecls map[string]map[string]bool
 }
 
 type cargoManifest struct {
 	Package struct {
-		Name          string `toml:"name"`
-		Build         string `toml:"build"`
-		BuildDisabled bool
-		AutoLib       *bool `toml:"autolib"`
-		AutoBins      *bool `toml:"autobins"`
-		AutoExamples  *bool `toml:"autoexamples"`
-		AutoTests     *bool `toml:"autotests"`
-		AutoBenches   *bool `toml:"autobenches"`
+		Name string `toml:"name"`
 	} `toml:"package"`
 	Workspace struct {
 		Members []string `toml:"members"`
@@ -56,19 +66,12 @@ type cargoManifest struct {
 	Lib struct {
 		Path string `toml:"path"`
 	} `toml:"lib"`
-	LibPresent bool
-	Targets    []cargoTarget
 }
 
-type cargoTarget struct {
-	Kind string
-	Name string
-	Path string
-}
-
-func buildRustWorkspaceIndex(root string, analyses []FileAnalysis) *rustWorkspaceIndex {
+func buildRustFallbackWorkspaceIndex(root string, analyses []FileAnalysis) *rustWorkspaceIndex {
 	index := &rustWorkspaceIndex{
 		byCrateID:   make(map[string][]rustPackage),
+		byRoot:      make(map[string]rustPackage),
 		moduleDecls: make(map[string]map[string]bool),
 	}
 	for _, analysis := range analyses {
@@ -129,148 +132,27 @@ func buildRustWorkspaceIndex(root string, analyses []FileAnalysis) *rustWorkspac
 		if !ok || manifest.Package.Name == "" {
 			continue
 		}
-		targets, lib := rustPackageTargets(root, memberDir, manifest)
+		libFile := manifest.Lib.Path
+		if libFile == "" {
+			libFile = filepath.Join("src", "lib.rs")
+		}
+		libFile = filepath.Clean(filepath.Join(memberDir, libFile))
+		lib := rustTarget{rootFile: libFile, sourceDir: filepath.Dir(libFile), kind: rustTargetLib}
 		pkg := rustPackage{
 			crateID: strings.ReplaceAll(manifest.Package.Name, "-", "_"),
 			root:    memberDir,
-			lib:     lib,
-			targets: targets,
+			lib:     &lib,
+			targets: []rustTarget{lib},
 		}
 		index.packages = append(index.packages, pkg)
 		index.byCrateID[pkg.crateID] = append(index.byCrateID[pkg.crateID], pkg)
+		index.byRoot[pkg.root] = pkg
 	}
 
 	sort.Slice(index.packages, func(i, j int) bool {
 		return len(index.packages[i].root) > len(index.packages[j].root)
 	})
 	return index
-}
-
-func rustPackageTargets(root, memberDir string, manifest cargoManifest) ([]rustTarget, *rustTarget) {
-	var targets []rustTarget
-	seen := make(map[string]bool)
-	add := func(path string) *rustTarget {
-		if path == "" {
-			return nil
-		}
-		rootFile := filepath.Clean(filepath.Join(memberDir, filepath.FromSlash(path)))
-		info, err := os.Stat(filepath.Join(root, rootFile))
-		if err != nil || info.IsDir() {
-			return nil
-		}
-		target := rustTarget{rootFile: rootFile, sourceDir: filepath.Dir(rootFile)}
-		if !seen[rootFile] {
-			targets = append(targets, target)
-			seen[rootFile] = true
-		}
-		return &target
-	}
-	addMatches := func(patterns ...string) {
-		for _, pattern := range patterns {
-			matches, err := filepath.Glob(filepath.Join(root, memberDir, filepath.FromSlash(pattern)))
-			if err != nil {
-				continue
-			}
-			for _, match := range matches {
-				rel, err := filepath.Rel(filepath.Join(root, memberDir), match)
-				if err == nil {
-					add(rel)
-				}
-			}
-		}
-	}
-	addInferred := func(target cargoTarget) {
-		var existing []string
-		for _, path := range inferredCargoTargetPaths(manifest.Package.Name, target) {
-			info, err := os.Stat(filepath.Join(root, memberDir, filepath.FromSlash(path)))
-			if err == nil && !info.IsDir() {
-				existing = append(existing, path)
-			}
-		}
-		if len(existing) == 1 {
-			add(existing[0])
-		}
-	}
-
-	var lib *rustTarget
-	if manifest.LibPresent || manifest.Lib.Path != "" || cargoAutoEnabled(manifest.Package.AutoLib) {
-		libPath := manifest.Lib.Path
-		if libPath == "" {
-			libPath = filepath.Join("src", "lib.rs")
-		}
-		lib = add(libPath)
-	}
-
-	if cargoAutoEnabled(manifest.Package.AutoBins) {
-		add(filepath.Join("src", "main.rs"))
-		addMatches("src/bin/*.rs", "src/bin/*/main.rs")
-	}
-	if cargoAutoEnabled(manifest.Package.AutoExamples) {
-		addMatches("examples/*.rs", "examples/*/main.rs")
-	}
-	if cargoAutoEnabled(manifest.Package.AutoTests) {
-		addMatches("tests/*.rs", "tests/*/main.rs")
-	}
-	if cargoAutoEnabled(manifest.Package.AutoBenches) {
-		addMatches("benches/*.rs", "benches/*/main.rs")
-	}
-	if !manifest.Package.BuildDisabled {
-		buildPath := manifest.Package.Build
-		if buildPath == "" {
-			buildPath = "build.rs"
-		}
-		add(buildPath)
-	}
-	for _, target := range manifest.Targets {
-		if target.Path != "" {
-			add(target.Path)
-		} else {
-			addInferred(target)
-		}
-	}
-
-	sort.Slice(targets, func(i, j int) bool {
-		return targets[i].rootFile < targets[j].rootFile
-	})
-	return targets, lib
-}
-
-func inferredCargoTargetPaths(packageName string, target cargoTarget) []string {
-	if target.Name == "" {
-		return nil
-	}
-	switch target.Kind {
-	case "bin":
-		var paths []string
-		if target.Name == packageName {
-			paths = append(paths, filepath.Join("src", "main.rs"))
-		}
-		return append(paths,
-			filepath.Join("src", "bin", target.Name+".rs"),
-			filepath.Join("src", "bin", target.Name, "main.rs"),
-		)
-	case "example":
-		return []string{
-			filepath.Join("examples", target.Name+".rs"),
-			filepath.Join("examples", target.Name, "main.rs"),
-		}
-	case "test":
-		return []string{
-			filepath.Join("tests", target.Name+".rs"),
-			filepath.Join("tests", target.Name, "main.rs"),
-		}
-	case "bench":
-		return []string{
-			filepath.Join("benches", target.Name+".rs"),
-			filepath.Join("benches", target.Name, "main.rs"),
-		}
-	default:
-		return nil
-	}
-}
-
-func cargoAutoEnabled(flag *bool) bool {
-	return flag == nil || *flag
 }
 
 func readCargoManifest(path string) (cargoManifest, bool) {
@@ -282,38 +164,18 @@ func readCargoManifest(path string) (cargoManifest, bool) {
 	defer file.Close()
 
 	section := ""
-	targetIndex := -1
 	var pendingKey string
 	var pendingValue strings.Builder
 	apply := func(key, value string) {
 		switch {
 		case section == "package" && key == "name":
 			manifest.Package.Name = parseCargoString(value)
-		case section == "package" && key == "build":
-			manifest.Package.Build = parseCargoString(value)
-			if enabled, ok := parseCargoBool(value); ok {
-				manifest.Package.BuildDisabled = !enabled
-			}
-		case section == "package" && key == "autolib":
-			manifest.Package.AutoLib = parseCargoBoolPtr(value)
-		case section == "package" && key == "autobins":
-			manifest.Package.AutoBins = parseCargoBoolPtr(value)
-		case section == "package" && key == "autoexamples":
-			manifest.Package.AutoExamples = parseCargoBoolPtr(value)
-		case section == "package" && key == "autotests":
-			manifest.Package.AutoTests = parseCargoBoolPtr(value)
-		case section == "package" && key == "autobenches":
-			manifest.Package.AutoBenches = parseCargoBoolPtr(value)
 		case section == "workspace" && key == "members":
 			manifest.Workspace.Members = parseCargoStringArray(value)
 		case section == "workspace" && key == "exclude":
 			manifest.Workspace.Exclude = parseCargoStringArray(value)
 		case section == "lib" && key == "path":
 			manifest.Lib.Path = parseCargoString(value)
-		case targetIndex >= 0 && key == "path":
-			manifest.Targets[targetIndex].Path = parseCargoString(value)
-		case targetIndex >= 0 && key == "name":
-			manifest.Targets[targetIndex].Name = parseCargoString(value)
 		}
 	}
 
@@ -332,22 +194,8 @@ func readCargoManifest(path string) (cargoManifest, bool) {
 		if line == "" {
 			continue
 		}
-		if strings.HasPrefix(line, "[[") && strings.HasSuffix(line, "]]") {
-			section = strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(line, "[["), "]]"))
-			targetIndex = -1
-			switch section {
-			case "bin", "example", "test", "bench":
-				manifest.Targets = append(manifest.Targets, cargoTarget{Kind: section})
-				targetIndex = len(manifest.Targets) - 1
-			}
-			continue
-		}
 		if strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]") {
 			section = strings.TrimSpace(strings.Trim(line, "[]"))
-			targetIndex = -1
-			if section == "lib" {
-				manifest.LibPresent = true
-			}
 			continue
 		}
 		key, value, ok := strings.Cut(line, "=")
@@ -413,19 +261,6 @@ func parseCargoStringArray(value string) []string {
 	return result
 }
 
-func parseCargoBool(value string) (bool, bool) {
-	parsed, err := strconv.ParseBool(strings.TrimSpace(strings.TrimSuffix(value, ",")))
-	return parsed, err == nil
-}
-
-func parseCargoBoolPtr(value string) *bool {
-	parsed, ok := parseCargoBool(value)
-	if !ok {
-		return nil
-	}
-	return &parsed
-}
-
 func resolveRustReferences(root string, analysis FileAnalysis, idx *fileIndex, workspace *rustWorkspaceIndex) []string {
 	var resolved []string
 	for _, ref := range analysis.References {
@@ -448,6 +283,9 @@ func resolveRustReferences(root string, analysis FileAnalysis, idx *fileIndex, w
 
 func resolveRustModule(name, fromFile string, idx *fileIndex, workspace *rustWorkspaceIndex) string {
 	dir := rustModuleDir(fromFile, idx, workspace)
+	if dir == "" {
+		return ""
+	}
 	for _, candidate := range []string{
 		filepath.Join(dir, name+".rs"),
 		filepath.Join(dir, name, "mod.rs"),
@@ -460,8 +298,14 @@ func resolveRustModule(name, fromFile string, idx *fileIndex, workspace *rustWor
 }
 
 func rustModuleDir(fromFile string, idx *fileIndex, workspace *rustWorkspaceIndex) string {
-	if target, ok := workspace.targetForFile(fromFile, idx); ok && target.rootFile == filepath.Clean(fromFile) {
-		return target.sourceDir
+	if pkg, ok := workspace.packageForFile(fromFile); ok && pkg.authoritative {
+		target, ok := workspace.targetForFile(fromFile, idx)
+		if !ok {
+			return ""
+		}
+		if target.rootFile == filepath.Clean(fromFile) {
+			return target.sourceDir
+		}
 	}
 	return rustChildModuleDir(fromFile)
 }
@@ -470,7 +314,7 @@ func rustChildModuleDir(path string) string {
 	dir := filepath.Dir(path)
 	base := filepath.Base(path)
 	switch base {
-	case "mod.rs":
+	case "lib.rs", "main.rs", "mod.rs":
 		return dir
 	default:
 		return filepath.Join(dir, strings.TrimSuffix(base, filepath.Ext(base)))
@@ -497,15 +341,21 @@ func resolveRustPath(path, fromFile string, idx *fileIndex, workspace *rustWorks
 		parts = parts[1:]
 	case "self":
 		base = rustModuleDir(fromFile, idx, workspace)
+		if base == "" {
+			return ""
+		}
 		parts = parts[1:]
 	case "super":
 		base = rustModuleDir(fromFile, idx, workspace)
+		if base == "" {
+			return ""
+		}
 		for len(parts) > 0 && parts[0] == "super" {
 			base = filepath.Dir(base)
 			parts = parts[1:]
 		}
 	default:
-		packages := workspace.byCrateID[parts[0]]
+		packages := workspace.externalPackagesForPath(parts[0], fromFile, idx)
 		if len(packages) != 1 {
 			return ""
 		}
@@ -531,6 +381,42 @@ func resolveRustPath(path, fromFile string, idx *fileIndex, workspace *rustWorks
 		}
 	}
 	return ""
+}
+
+func (index *rustWorkspaceIndex) externalPackagesForPath(alias, fromFile string, idx *fileIndex) []rustPackage {
+	pkg, ok := index.packageForFile(fromFile)
+	if !ok || !pkg.authoritative {
+		return index.byCrateID[alias]
+	}
+	target, ok := index.targetForFile(fromFile, idx)
+	if !ok {
+		return nil
+	}
+	seen := make(map[string]bool)
+	var packages []rustPackage
+	for _, dependency := range pkg.dependencies {
+		if dependency.alias != alias || !rustDependencyEligible(dependency.kind, target.kind) || seen[dependency.packageRoot] {
+			continue
+		}
+		dependencyPackage, ok := index.byRoot[dependency.packageRoot]
+		if !ok {
+			continue
+		}
+		seen[dependency.packageRoot] = true
+		packages = append(packages, dependencyPackage)
+	}
+	return packages
+}
+
+func rustDependencyEligible(dependencyKind, targetKind string) bool {
+	switch dependencyKind {
+	case "build":
+		return targetKind == rustTargetCustomBuild
+	case "dev":
+		return targetKind == rustTargetTest || targetKind == rustTargetExample || targetKind == rustTargetBench
+	default:
+		return targetKind != rustTargetCustomBuild
+	}
 }
 
 func (index *rustWorkspaceIndex) targetForFile(path string, idx *fileIndex) (rustTarget, bool) {

@@ -55,6 +55,10 @@ func BuildFileGraphFromAnalyses(root string, analyses []FileAnalysis) (*FileGrap
 // BuildFileGraphFromAnalysesContext builds a file graph from existing analyses
 // while honoring cancellation during configured-file scanning and resolution.
 func BuildFileGraphFromAnalysesContext(ctx context.Context, root string, analyses []FileAnalysis) (*FileGraph, error) {
+	return buildFileGraphFromAnalysesWithCargoMetadata(ctx, root, analyses, loadCargoMetadata)
+}
+
+func buildFileGraphFromAnalysesWithCargoMetadata(ctx context.Context, root string, analyses []FileAnalysis, loader cargoMetadataLoader) (*FileGraph, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -84,15 +88,15 @@ func BuildFileGraphFromAnalysesContext(ctx context.Context, root string, analyse
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	rustWorkspace := buildRustWorkspaceIndex(absRoot, analyses)
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
 
 	// Scan all files
 	gitCache := NewGitIgnoreCache(root)
 	files, err := ScanConfiguredFilesContext(ctx, root, gitCache)
 	if err != nil {
+		return nil, err
+	}
+	rustWorkspace := buildRustWorkspaceIndex(ctx, absRoot, analyses, files, loader)
+	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 
