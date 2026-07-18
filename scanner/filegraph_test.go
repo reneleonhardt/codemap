@@ -133,6 +133,231 @@ edition = "2021"
 	}
 }
 
+func TestRustWorkspaceResolvesModulesFromCargoTargetRoots(t *testing.T) {
+	if !NewAstGrepAnalyzer().Available() {
+		t.Skip("ast-grep not available")
+	}
+
+	root := t.TempDir()
+	files := map[string]string{
+		"Cargo.toml": `[package]
+name = "target-roots"
+version = "0.1.0"
+edition = "2021"
+build = "scripts/build.rs"
+
+[[bin]]
+name = "cli"
+path = "tools/cli.rs"
+`,
+		"src/lib.rs":          "mod library;\nuse crate::{library::run};\n",
+		"src/library.rs":      "pub fn run() {}\n",
+		"src/main.rs":         "mod application;\nfn main() { crate::application::run(); }\n",
+		"src/application.rs":  "pub fn run() {}\n",
+		"src/bin/admin.rs":    "mod support;\nfn main() { crate::support::run(); }\n",
+		"src/bin/support.rs":  "pub fn run() {}\n",
+		"tests/api.rs":        "mod common;\n#[test] fn api() { crate::common::run(); }\n",
+		"tests/common/mod.rs": "pub fn run() {}\n",
+		"examples/demo.rs":    "mod support;\nfn main() { crate::support::run(); }\n",
+		"examples/support.rs": "pub fn run() {}\n",
+		"scripts/build.rs":    "mod support;\nfn main() { crate::support::run(); }\n",
+		"scripts/support.rs":  "pub fn run() {}\n",
+		"tools/cli.rs":        "mod support;\nfn main() { crate::support::run(); }\n",
+		"tools/support.rs":    "pub fn run() {}\n",
+	}
+	for path, content := range files {
+		full := filepath.Join(root, path)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	graph, err := BuildFileGraph(root)
+	if err != nil {
+		t.Fatalf("BuildFileGraph() error: %v", err)
+	}
+
+	wants := map[string][]string{
+		"src/lib.rs":       {"src/library.rs"},
+		"src/main.rs":      {"src/application.rs"},
+		"src/bin/admin.rs": {"src/bin/support.rs"},
+		"tests/api.rs":     {"tests/common/mod.rs"},
+		"examples/demo.rs": {"examples/support.rs"},
+		"scripts/build.rs": {"scripts/support.rs"},
+		"tools/cli.rs":     {"tools/support.rs"},
+	}
+	for from, want := range wants {
+		got := append([]string(nil), graph.Imports[from]...)
+		sort.Strings(got)
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("%s imports = %#v, want %#v", from, got, want)
+		}
+	}
+}
+
+func TestRustWorkspaceCargoTargetOwnershipIsConservative(t *testing.T) {
+	if !NewAstGrepAnalyzer().Available() {
+		t.Skip("ast-grep not available")
+	}
+
+	root := t.TempDir()
+	files := map[string]string{
+		"Cargo.toml": `[package]
+name = "target-ownership"
+version = "0.1.0"
+edition = "2021"
+autobins = false
+
+[[bin]]
+name = "app"
+path = "src/app.rs"
+`,
+		"src/lib.rs":       "mod shared;\nmod common;\n",
+		"src/app.rs":       "mod shared;\nmod common;\nfn main() {}\n",
+		"src/shared.rs":    "pub fn run() { crate::common::run(); }\n",
+		"src/common.rs":    "pub fn run() {}\n",
+		"src/main.rs":      "pub fn ignored() { crate::common::run(); }\n",
+		"tools/helper.rs":  "pub fn ignored() { crate::common::run(); }\n",
+		"build.rs":         "mod build_support;\nmod build_common;\n",
+		"build_support.rs": "pub fn run() { crate::build_common::run(); }\n",
+		"build_common.rs":  "pub fn run() {}\n",
+	}
+	for path, content := range files {
+		full := filepath.Join(root, path)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	graph, err := BuildFileGraph(root)
+	if err != nil {
+		t.Fatalf("BuildFileGraph() error: %v", err)
+	}
+
+	if got := graph.Imports["src/shared.rs"]; len(got) != 0 {
+		t.Fatalf("ambiguous shared module imports = %#v, want unresolved", got)
+	}
+	if got := graph.Imports["src/main.rs"]; len(got) != 0 {
+		t.Fatalf("disabled automatic binary imports = %#v, want unresolved", got)
+	}
+	if got := graph.Imports["tools/helper.rs"]; len(got) != 0 {
+		t.Fatalf("file outside a Cargo module tree imports = %#v, want unresolved", got)
+	}
+	if got := graph.Imports["build_support.rs"]; !reflect.DeepEqual(got, []string{"build_common.rs"}) {
+		t.Fatalf("root build-script module imports = %#v, want its target-root module", got)
+	}
+}
+
+func TestRustWorkspaceHonorsExplicitCargoTargetConfiguration(t *testing.T) {
+	if !NewAstGrepAnalyzer().Available() {
+		t.Skip("ast-grep not available")
+	}
+
+	tests := []struct {
+		name     string
+		manifest string
+		files    map[string]string
+		wants    map[string][]string
+	}{
+		{
+			name: "disabled automatic library",
+			manifest: `[package]
+name = "no-auto-lib"
+version = "0.1.0"
+edition = "2021"
+autolib = false
+autobins = false
+
+[[bin]]
+name = "app"
+path = "tools/app.rs"
+`,
+			files: map[string]string{
+				"src/lib.rs":    "mod common;\npub fn run() { crate::common::run(); }\n",
+				"src/common.rs": "pub fn run() {}\n",
+				"tools/app.rs":  "fn main() {}\n",
+			},
+			wants: map[string][]string{"src/lib.rs": nil},
+		},
+		{
+			name: "named binary with inferred path",
+			manifest: `[package]
+name = "named-bin"
+version = "0.1.0"
+edition = "2021"
+autolib = false
+autobins = false
+
+[[bin]]
+name = "cli"
+`,
+			files: map[string]string{
+				"src/bin/cli.rs":     "mod support;\nfn main() { crate::support::run(); }\n",
+				"src/bin/support.rs": "pub fn run() {}\n",
+			},
+			wants: map[string][]string{"src/bin/cli.rs": {"src/bin/support.rs"}},
+		},
+		{
+			name: "nested modules named like roots",
+			manifest: `[package]
+name = "nested-root-names"
+version = "0.1.0"
+edition = "2021"
+autolib = false
+autobins = false
+
+[[bin]]
+name = "app"
+path = "src/app.rs"
+`,
+			files: map[string]string{
+				"src/app.rs":    "mod main;\nmod lib;\nmod common;\nfn main() {}\n",
+				"src/main.rs":   "pub fn run() { crate::common::run(); }\n",
+				"src/lib.rs":    "pub fn run() { crate::common::run(); }\n",
+				"src/common.rs": "pub fn run() {}\n",
+			},
+			wants: map[string][]string{
+				"src/main.rs": {"src/common.rs"},
+				"src/lib.rs":  {"src/common.rs"},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			tt.files["Cargo.toml"] = tt.manifest
+			for path, content := range tt.files {
+				full := filepath.Join(root, path)
+				if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(full, []byte(content), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			graph, err := BuildFileGraph(root)
+			if err != nil {
+				t.Fatalf("BuildFileGraph() error: %v", err)
+			}
+			for from, want := range tt.wants {
+				got := append([]string(nil), graph.Imports[from]...)
+				sort.Strings(got)
+				if !reflect.DeepEqual(got, want) {
+					t.Errorf("%s imports = %#v, want %#v", from, got, want)
+				}
+			}
+		})
+	}
+}
+
 func TestDetectLanguage(t *testing.T) {
 	tests := []struct {
 		name     string

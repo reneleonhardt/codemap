@@ -61,7 +61,7 @@ func BuildFileGraphFromAnalyses(root string, analyses []FileAnalysis) (*FileGrap
 
 	// Detect path aliases from tsconfig.json (for TS/JS import resolution)
 	fg.PathAliases, fg.BaseURL = detectPathAliases(absRoot)
-	rustWorkspace := buildRustWorkspaceIndex(absRoot)
+	rustWorkspace := buildRustWorkspaceIndex(absRoot, analyses)
 
 	// Scan all files
 	gitCache := NewGitIgnoreCache(root)
