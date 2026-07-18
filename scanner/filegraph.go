@@ -2,6 +2,7 @@ package scanner
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -43,6 +44,13 @@ func BuildFileGraph(root string) (*FileGraph, error) {
 // scan, letting callers that already hold the analyses avoid a redundant
 // full-repo ScanForDeps. BuildFileGraph is the convenience wrapper that scans.
 func BuildFileGraphFromAnalyses(root string, analyses []FileAnalysis) (*FileGraph, error) {
+	return buildFileGraphFromAnalysesWithCargoMetadata(context.Background(), root, analyses, loadCargoMetadata)
+}
+
+func buildFileGraphFromAnalysesWithCargoMetadata(ctx context.Context, root string, analyses []FileAnalysis, loader cargoMetadataLoader) (*FileGraph, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	absRoot, err := filepath.Abs(root)
 	if err != nil {
 		return nil, err
@@ -61,12 +69,15 @@ func BuildFileGraphFromAnalyses(root string, analyses []FileAnalysis) (*FileGrap
 
 	// Detect path aliases from tsconfig.json (for TS/JS import resolution)
 	fg.PathAliases, fg.BaseURL = detectPathAliases(absRoot)
-	rustWorkspace := buildRustWorkspaceIndex(absRoot)
 
 	// Scan all files
 	gitCache := NewGitIgnoreCache(root)
 	files, err := ScanFiles(root, gitCache, nil, nil)
 	if err != nil {
+		return nil, err
+	}
+	rustWorkspace := buildRustWorkspaceIndex(ctx, absRoot, analyses, files, loader)
+	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 
