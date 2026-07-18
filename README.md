@@ -496,7 +496,7 @@ codemap context --for "refactor auth" # With pre-classified intent + matched ski
 codemap context --compact             # Minimal for token-constrained agents
 ```
 
-The output is a `ContextEnvelope` containing project metadata, intent classification, working set, matched skills, and handoff reference. Cursor, Windsurf, Codex, custom agents — anything that can shell out gets code-aware intelligence.
+The output is a `ContextEnvelope` containing project metadata, dependency-graph evidence, intent classification, working set, matched skills, and handoff reference. If fresh graph evidence is unavailable, hub counts are `null` and risk is `unknown` instead of being inferred from stale state. Cursor, Windsurf, Codex, custom agents — anything that can shell out gets code-aware intelligence.
 
 ## HTTP API
 

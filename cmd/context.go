@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -15,7 +16,6 @@ import (
 	"codemap/handoff"
 	"codemap/scanner"
 	"codemap/skills"
-	"codemap/watch"
 )
 
 // ContextEnvelope is the standardized output format that any AI tool can consume.
@@ -32,12 +32,13 @@ type ContextEnvelope struct {
 
 // ProjectContext contains high-level project metadata.
 type ProjectContext struct {
-	Root      string   `json:"root"`
-	Branch    string   `json:"branch"`
-	FileCount int      `json:"file_count"`
-	Languages []string `json:"languages"`
-	HubCount  int      `json:"hub_count"`
-	TopHubs   []string `json:"top_hubs,omitempty"`
+	Root          string        `json:"root"`
+	Branch        string        `json:"branch"`
+	FileCount     int           `json:"file_count"`
+	Languages     []string      `json:"languages"`
+	HubCount      *int          `json:"hub_count"`
+	TopHubs       []string      `json:"top_hubs,omitempty"`
+	GraphEvidence GraphEvidence `json:"graph_evidence"`
 }
 
 // WorkingSetContext is a summary of the current working set.
@@ -115,21 +116,37 @@ func RunContext(args []string, root string) {
 }
 
 func buildContextEnvelope(root, prompt string, compact bool) ContextEnvelope {
+	return buildContextEnvelopeContext(context.Background(), root, prompt, compact)
+}
+
+func buildContextEnvelopeContext(ctx context.Context, root, prompt string, compact bool) ContextEnvelope {
+	return buildContextEnvelopeWithDeps(ctx, root, prompt, compact, defaultContextEnvelopeDeps())
+}
+
+func buildContextEnvelopeWithDeps(parent context.Context, root, prompt string, compact bool, deps contextEnvelopeDeps) ContextEnvelope {
+	timeout := deps.graphTimeout
+	if timeout <= 0 {
+		timeout = defaultContextGraphTimeout
+	}
+	ctx, cancel := context.WithTimeout(parent, timeout)
+	defer cancel()
+
 	projCfg := config.Load(root)
-	info := getHubInfoNoFallback(root)
+	inputs := loadContextRequestInputs(ctx, root, deps)
 
 	envelope := ContextEnvelope{
-		Version:     1,
-		GeneratedAt: time.Now(),
-		Project:     buildProjectContext(root, info),
+		Version:     2,
+		GeneratedAt: deps.now(),
+		Project:     buildProjectContext(root, inputs),
 		Budget:      BudgetInfo{Compact: compact},
 	}
 
 	// Intent classification (if prompt provided)
 	if prompt != "" {
 		topK := projCfg.RoutingTopKOrDefault()
-		files := extractMentionedFiles(prompt, topK)
-		intent := classifyIntent(prompt, files, info, projCfg)
+		mentions := extractMentionedFiles(strings.ReplaceAll(prompt, `\`, "/"), topK)
+		files := resolveExactConfiguredFiles(mentions, inputs.fileSet)
+		intent := classifyIntent(prompt, files, inputs.info, projCfg)
 		envelope.Intent = &intent
 
 		// Match skills against intent
@@ -153,23 +170,29 @@ func buildContextEnvelope(root, prompt string, compact bool) ContextEnvelope {
 		}
 	}
 
-	// Working set from daemon
-	if state := watch.ReadState(root); state != nil && state.WorkingSet != nil {
+	// Working-set activity comes from the daemon, but structural labels must be
+	// recomputed from this request's fresh graph evidence.
+	if state := inputs.state; inputs.evidence.Status == graphEvidenceAvailable && inputs.info != nil && state != nil && state.WorkingSet != nil {
 		ws := state.WorkingSet
 		wsCtx := &WorkingSetContext{
 			FileCount: ws.Size(),
-			HubCount:  ws.HubCount(),
+		}
+		for path := range ws.Files {
+			if len(inputs.info.Importers[path]) >= 3 {
+				wsCtx.HubCount++
+			}
 		}
 		limit := 10
 		if compact {
 			limit = 3
 		}
 		for _, wf := range ws.HotFiles(limit) {
+			isHub := len(inputs.info.Importers[wf.Path]) >= 3
 			wsCtx.TopFiles = append(wsCtx.TopFiles, WorkingFileContext{
 				Path:      wf.Path,
 				EditCount: wf.EditCount,
 				NetDelta:  wf.NetDelta,
-				IsHub:     wf.IsHub,
+				IsHub:     isHub,
 			})
 		}
 		envelope.WorkingSet = wsCtx
@@ -195,59 +218,42 @@ func buildContextEnvelope(root, prompt string, compact bool) ContextEnvelope {
 	return envelope
 }
 
-func buildProjectContext(root string, info *hubInfo) ProjectContext {
+func buildProjectContext(root string, inputs contextRequestInputs) ProjectContext {
 	ctx := ProjectContext{
-		Root: root,
+		Root:          root,
+		FileCount:     len(inputs.files),
+		GraphEvidence: inputs.evidence,
 	}
-	configuredFileCountKnown := false
 
 	// Get branch
 	if branch, ok := gitCurrentBranch(root); ok {
 		ctx.Branch = branch
 	}
 
-	// Count files and detect languages from daemon state
-	if state := watch.ReadState(root); state != nil {
-		if count, ok := state.ConfiguredCount(); ok {
-			ctx.FileCount = count
-			configuredFileCountKnown = true
+	if inputs.evidence.Status == graphEvidenceAvailable {
+		count := 0
+		if inputs.info != nil {
+			count = len(inputs.info.Hubs)
+			if count > 5 {
+				ctx.TopHubs = append([]string(nil), inputs.info.Hubs[:5]...)
+			} else {
+				ctx.TopHubs = append([]string(nil), inputs.info.Hubs...)
+			}
 		}
-		ctx.HubCount = len(state.Hubs)
-		if len(state.Hubs) > 5 {
-			ctx.TopHubs = state.Hubs[:5]
-		} else {
-			ctx.TopHubs = state.Hubs
-		}
+		ctx.HubCount = &count
 	}
 
 	// Detect languages from multiple sources
 	langSet := make(map[string]bool)
 
-	// Source 1: dependency graph (importers + imports)
-	if info != nil {
-		for file := range info.Importers {
-			if lang := scanner.DetectLanguage(file); lang != "" {
-				langSet[lang] = true
-			}
-		}
-		for file := range info.Imports {
-			if lang := scanner.DetectLanguage(file); lang != "" {
-				langSet[lang] = true
-			}
-		}
-	}
-
-	// Source 2: hubs
-	for _, hub := range ctx.TopHubs {
-		if lang := scanner.DetectLanguage(hub); lang != "" {
+	for _, file := range inputs.files {
+		if lang := scanner.DetectLanguage(file.Path); lang != "" {
 			langSet[lang] = true
 		}
 	}
 
-	// Source 3: cheap fallback — scan for manifest files and top-level source files.
-	// This runs when daemon isn't active and dep graph is empty.
 	if len(langSet) == 0 {
-		langSet = detectLanguagesFromFiles(root)
+		langSet = detectManifestLanguages(root)
 	}
 
 	for lang := range langSet {
@@ -255,12 +261,24 @@ func buildProjectContext(root string, info *hubInfo) ProjectContext {
 	}
 	sort.Strings(ctx.Languages)
 
-	// Fallback file count from quick scan if daemon wasn't available
-	if !configuredFileCountKnown && ctx.FileCount == 0 && len(ctx.Languages) > 0 {
-		ctx.FileCount = countSourceFiles(root)
-	}
-
 	return ctx
+}
+
+func detectManifestLanguages(root string) map[string]bool {
+	langs := make(map[string]bool)
+	manifests := map[string][]string{
+		"go.mod": {"go"}, "package.json": {"javascript"}, "Cargo.toml": {"rust"},
+		"pyproject.toml": {"python"}, "Package.swift": {"swift"},
+		"build.gradle": {"java"}, "build.gradle.kts": {"kotlin", "java"},
+	}
+	for file, signalLangs := range manifests {
+		if _, err := os.Stat(filepath.Join(root, file)); err == nil {
+			for _, lang := range signalLangs {
+				langs[lang] = true
+			}
+		}
+	}
+	return langs
 }
 
 // detectLanguagesFromFiles does a quick scan for language signals.
